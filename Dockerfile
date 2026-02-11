@@ -2,13 +2,13 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Только базовые зависимости (ffmpeg НЕ нужен!)
+# Установка системных зависимостей (только необходимое)
 RUN apt-get update && apt-get install -y \
     git \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Обновляем pip
+# Обновляем pip и устанавливаем базовые пакеты
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
 # Копирование зависимостей
