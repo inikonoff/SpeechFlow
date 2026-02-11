@@ -1,6 +1,5 @@
-# src/config.py
 from pydantic_settings import BaseSettings
-from typing import List
+from typing import List, Optional
 
 
 class Settings(BaseSettings):
@@ -14,7 +13,7 @@ class Settings(BaseSettings):
     SUPABASE_URL: str
     SUPABASE_KEY: str
     
-    # Admin IDs
+    # Admin IDs - ПРАВИЛЬНАЯ ОБРАБОТКА
     ADMIN_IDS: List[int] = []
     
     # Bot settings
@@ -22,13 +21,23 @@ class Settings(BaseSettings):
     
     class Config:
         env_file = ".env"
+        env_file_encoding = "utf-8"
+        # Разрешаем автоматическую конвертацию из строки в список
+        coerce_numbers_to_str = True
     
-    @property
-    def groq_api_keys_list(self) -> List[str]:
-        """Преобразуем строку из .env в список"""
-        if isinstance(self.GROQ_API_KEYS, str):
-            return [k.strip() for k in self.GROQ_API_KEYS.split(",") if k.strip()]
-        return self.GROQ_API_KEYS
+    @classmethod
+    def parse_env_var(cls, field_name: str, raw_val: str):
+        if field_name == "ADMIN_IDS":
+            # Если это строка с запятыми - разбиваем в список
+            if isinstance(raw_val, str) and "," in raw_val:
+                return [int(id.strip()) for id in raw_val.split(",") if id.strip()]
+            # Если это одно число - делаем список с одним элементом
+            elif isinstance(raw_val, str) and raw_val.strip().isdigit():
+                return [int(raw_val.strip())]
+            # Если это уже список (например, из .env как строка)
+            elif isinstance(raw_val, list):
+                return raw_val
+        return super().parse_env_var(field_name, raw_val)
 
 
 settings = Settings()
