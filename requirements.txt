@@ -1,18 +1,17 @@
-# Core - фиксированные совместимые версии
-aiogram==3.15.0
-aiofiles==23.2.1
-aiohttp==3.10.10
-fastapi==0.115.5
-uvicorn[standard]==0.32.0
-python-dotenv==1.0.1
-pydantic-settings==2.5.0
+# Core
+aiogram
+aiofiles
+fastapi
+uvicorn[standard]
+python-dotenv
+pydantic-settings
 
 # Groq AI
-openai==1.52.0
+openai
 
 # Supabase
-supabase==2.6.0
+supabase
 
 # Build
-setuptools==75.1.0
-wheel==0.44.0
+setuptools
+wheel
