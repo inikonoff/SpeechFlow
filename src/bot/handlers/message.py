@@ -1,53 +1,38 @@
 import logging
-import whisper
 from aiogram import Router, types
 from aiogram.types import Message
 from aiogram.filters import Command
 
-from src.config import settings
+from src.config import settings, ADMIN_IDS
 from src.services.supabase_db import db
 from src.services.groq_client import groq_client
-from src.utils.audio import save_voice_file, convert_ogg_to_mp3, cleanup_file
+from src.utils.audio import save_voice_file, cleanup_file
 
 router = Router()
 logger = logging.getLogger(__name__)
 
-# Загружаем модель Whisper (ленивая загрузка)
-_whisper_model = None
 
-def get_whisper_model():
-    """Ленивая загрузка модели Whisper"""
-    global _whisper_model
-    if _whisper_model is None:
-        _whisper_model = whisper.load_model("base")
-    return _whisper_model
-
-
-async def transcribe_voice_message(voice_file_bytes: bytes) -> str:
-    """Транскрибируем голосовое сообщение через Whisper"""
+async def transcribe_voice_with_groq(voice_file_bytes: bytes) -> str:
+    """Транскрибация голоса через Groq Whisper API"""
     try:
         # Сохраняем временный файл
         ogg_path = await save_voice_file(voice_file_bytes, "ogg")
-        mp3_path = None
         
         try:
-            # Конвертируем в MP3
-            mp3_path = await convert_ogg_to_mp3(ogg_path)
+            # Читаем файл для отправки в Groq
+            with open(ogg_path, "rb") as f:
+                audio_bytes = f.read()
             
-            # Транскрибируем
-            model = get_whisper_model()
-            result = model.transcribe(str(mp3_path))
-            
-            return result["text"].strip()
+            # Отправляем в Groq
+            text = await groq_client.transcribe_audio(audio_bytes)
+            return text
             
         finally:
-            # Очищаем временные файлы
+            # Очищаем временный файл
             await cleanup_file(ogg_path)
-            if mp3_path:
-                await cleanup_file(mp3_path)
                 
     except Exception as e:
-        logger.error(f"Error transcribing voice: {e}")
+        logger.error(f"Error transcribing voice with Groq: {e}")
         raise
 
 
@@ -73,7 +58,8 @@ async def handle_message(message: Message):
         user_id = message.from_user.id
         
         # Проверяем лимиты (если не админ)
-        if not await db.is_admin(user_id) and settings.FREE_MESSAGES_LIMIT > 0:
+        is_admin = user_id in ADMIN_IDS
+        if not is_admin and settings.FREE_MESSAGES_LIMIT > 0:
             user = await db.get_or_create_user(user_id)
             if user.get("free_messages_used", 0) >= settings.FREE_MESSAGES_LIMIT:
                 await message.answer(
@@ -91,10 +77,10 @@ async def handle_message(message: Message):
             voice_file = await message.bot.get_file(message.voice.file_id)
             voice_bytes = await message.bot.download_file(voice_file.file_path)
             
-            # Транскрибируем
-            user_text = await transcribe_voice_message(voice_bytes.read())
+            # Транскрибируем через Groq
+            user_text = await transcribe_voice_with_groq(voice_bytes.read())
             
-            if not user_text:
+            if not user_text or user_text.startswith("[Transcription error"):
                 await message.answer("Could not transcribe your voice message. Please try again.")
                 return
                 
@@ -105,8 +91,7 @@ async def handle_message(message: Message):
             # Текстовое сообщение
             user_text = message.text.strip()
             
-            if not user_text:
-                await message.answer("Please send a text message.")
+            if not user_text or user_text.startswith("/"):
                 return
         else:
             await message.answer("Please send a text or voice message in English.")
