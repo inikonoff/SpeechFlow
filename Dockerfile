@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Установка системных зависимостей
+# Только базовые зависимости, ffmpeg НЕ НУЖЕН!
 RUN apt-get update && apt-get install -y \
     git \
     build-essential \
@@ -11,14 +11,14 @@ RUN apt-get update && apt-get install -y \
 # Обновляем pip
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# Копирование и установка зависимостей
+# Копирование зависимостей
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Копирование исходного кода
 COPY src/ ./src/
 
-# ВАЖНО: Устанавливаем PYTHONPATH для корректного импорта
+# Устанавливаем PYTHONPATH
 ENV PYTHONPATH=/app
 
 # Запуск приложения
