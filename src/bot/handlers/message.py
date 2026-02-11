@@ -6,7 +6,7 @@ from aiogram.filters import Command
 from src.config import settings, ADMIN_IDS
 from src.services.supabase_db import db
 from src.services.groq_client import groq_client
-from src.utils.audio import save_voice_file, cleanup_file
+from src.utils.audio import save_voice_file, cleanup_file, read_file_bytes
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -20,8 +20,7 @@ async def transcribe_voice_with_groq(voice_file_bytes: bytes) -> str:
         
         try:
             # Читаем файл для отправки в Groq
-            with open(ogg_path, "rb") as f:
-                audio_bytes = f.read()
+            audio_bytes = await read_file_bytes(ogg_path)
             
             # Отправляем в Groq
             text = await groq_client.transcribe_audio(audio_bytes)
@@ -38,9 +37,9 @@ async def transcribe_voice_with_groq(voice_file_bytes: bytes) -> str:
 
 @router.message(Command("stats"))
 async def cmd_stats(message: Message):
-    """Команда /stats - альтернатива кнопке"""
+    """Команда /stats"""
     from src.bot.handlers.menu import show_user_stats
-    # Создаем fake callback для повторного использования логики
+    
     class FakeCallback:
         def __init__(self, user_id, message):
             self.from_user = types.User(id=user_id, is_bot=False, first_name="")
@@ -94,7 +93,6 @@ async def handle_message(message: Message):
             if not user_text or user_text.startswith("/"):
                 return
         else:
-            await message.answer("Please send a text or voice message in English.")
             return
         
         # Получаем данные пользователя
