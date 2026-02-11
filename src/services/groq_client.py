@@ -1,9 +1,11 @@
-# src/services/groq_client.py
 import random
 import asyncio
 import logging
-from typing import List, Optional
+import json
+from typing import List, Optional, Dict, Any, Tuple
 from openai import AsyncOpenAI
+
+from src.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +64,7 @@ class GroqClient:
             response = await client.audio.transcriptions.create(
                 model="whisper-large-v3-turbo",
                 file=("audio.ogg", audio_bytes, "audio/ogg"),
-                language="en",  # Для Speech Flow - английский
+                language="en",
                 response_format="text",
                 temperature=0.0
             )
@@ -75,7 +77,7 @@ class GroqClient:
             logger.error(f"❌ Ошибка транскрибации: {e}")
             return f"[Transcription error: {str(e)[:100]}]"
     
-    async def correct_text(self, text: str, level: str) -> dict:
+    async def correct_text(self, text: str, level: str) -> Dict[str, Any]:
         """GPT OSS 120B для коррекции"""
         async def _correct(client):
             response = await client.chat.completions.create(
@@ -105,12 +107,13 @@ class GroqClient:
         """Llama 4 Scout для диалога"""
         async def _chat(client):
             response = await client.chat.completions.create(
-                model="llama-4-scout",
+                model="llama4-scout-17b-16e-instruct",  # Обновленное имя модели
                 messages=[
-                    {"role": "system", "content": f"You are Speech Flow AI. Level: {level}"},
+                    {"role": "system", "content": f"You are Speech Flow AI, an English conversation tutor. User level: {level}. Keep responses natural and end with a question."},
                     {"role": "user", "content": text}
                 ],
-                temperature=0.8
+                temperature=0.8,
+                max_tokens=400
             )
             return response.choices[0].message.content
         
@@ -119,3 +122,35 @@ class GroqClient:
         except Exception as e:
             logger.error(f"❌ Ошибка генерации ответа: {e}")
             return "I'm here to help you practice English. Tell me more!"
+    
+    async def process_user_message(self, telegram_id: int, user_text: str, user_level: str) -> Tuple[str, Dict[str, Any]]:
+        """Основной метод: параллельные вызовы"""
+        try:
+            # Параллельные вызовы
+            correction_task = self.correct_text(user_text, user_level)
+            response_task = self.generate_response(user_text, user_level)
+            
+            correction_result, chat_response = await asyncio.gather(correction_task, response_task)
+            
+            # Формируем финальный ответ
+            final_response = f"""💬 **Chat Response:**
+{chat_response}
+
+🔧 **Correction & Analysis:**
+{correction_result.get('corrected_sentence', user_text)}
+
+💡 **Why:**
+{correction_result.get('explanation', 'No corrections needed.')}"""
+            
+            if correction_result.get('vocabulary_items'):
+                final_response += "\n\n📚 *New words added to your vocabulary*"
+            
+            return final_response, correction_result
+            
+        except Exception as e:
+            logger.error(f"Error processing message: {e}")
+            return "Sorry, I encountered an error. Please try again.", {}
+
+
+# ✅ СОЗДАЕМ ГЛОБАЛЬНЫЙ ЭКЗЕМПЛЯР
+groq_client = GroqClient(settings.GROQ_API_KEYS)
