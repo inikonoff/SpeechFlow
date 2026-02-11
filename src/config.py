@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     # Telegram
     TELEGRAM_BOT_TOKEN: str
     
-    # Groq API Keys
+    # Groq API Keys (через запятую)
     GROQ_API_KEYS: List[str] = []
     
     # Supabase
@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     
     # Bot settings
     DEFAULT_USER_LEVEL: str = "intermediate"
+    FREE_MESSAGES_LIMIT: int = 0
     
     class Config:
         env_file = ".env"
@@ -25,9 +26,8 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
-# ⚠️ Отдельная константа для админов
+# ADMIN_IDS отдельно
 def get_admin_ids() -> List[int]:
-    """Получаем список админов из переменной окружения"""
     admin_ids_str = os.environ.get("ADMIN_IDS", "")
     if not admin_ids_str:
         return []
