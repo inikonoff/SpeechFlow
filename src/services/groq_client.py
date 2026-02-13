@@ -168,4 +168,4 @@ class GroqClient:
 
 
 # ✅ СОЗДАЕМ ГЛОБАЛЬНЫЙ ЭКЗЕМПЛЯР
-groq_client = GroqClient(settings.GROQ_API_KEYS)
+groq_client = GroqClient(settings.groq_api_keys_list)
