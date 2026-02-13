@@ -249,7 +249,7 @@ User Level: {level}
             voice: Голос (autumn, diana, hannah, austin, daniel, troy). По умолчанию из settings.
             
         Returns:
-            bytes: Аудио в формате OGG или None в случае ошибки
+            bytes: Аудио в формате WAV (Telegram поддерживает) или None в случае ошибки
         """
         if voice is None:
             voice = settings.TTS_VOICE
@@ -259,7 +259,7 @@ User Level: {level}
                 model="canopylabs/orpheus-v1-english",
                 voice=voice,
                 input=text,
-                response_format="opus"  # OGG Opus для Telegram
+                response_format="wav"  # Groq поддерживает только WAV
             )
             # response может быть HttpxBinaryResponseContent или bytes
             if hasattr(response, 'content'):
