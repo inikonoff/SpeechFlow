@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     # Bot settings
     DEFAULT_USER_LEVEL: str = "intermediate"
     FREE_MESSAGES_LIMIT: int = 0
+    VOICE_RESPONSE_MODE: str = "mirror"  # "always", "mirror", "never"
     
     class Config:
         env_file = ".env"
