@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     DEFAULT_USER_LEVEL: str = "intermediate"
     FREE_MESSAGES_LIMIT: int = 0
     VOICE_RESPONSE_MODE: str = "mirror"  # "always", "mirror", "never"
+    TTS_VOICE: str = "autumn"  # Groq Orpheus: autumn, diana, hannah, austin, daniel, troy
     
     class Config:
         env_file = ".env"
