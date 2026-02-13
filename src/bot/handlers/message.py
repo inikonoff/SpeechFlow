@@ -1,4 +1,5 @@
 import logging
+from io import BytesIO
 from aiogram import Router, types
 from aiogram.types import Message
 from aiogram.filters import Command
@@ -55,6 +56,7 @@ async def handle_message(message: Message):
     """Основной обработчик текстовых и голосовых сообщений"""
     try:
         user_id = message.from_user.id
+        is_voice_input = False
         
         # Проверяем лимиты (если не админ)
         is_admin = user_id in ADMIN_IDS
@@ -70,6 +72,7 @@ async def handle_message(message: Message):
         # Определяем текст сообщения
         if message.voice:
             # Голосовое сообщение
+            is_voice_input = True
             await message.bot.send_chat_action(user_id, "typing")
             
             # Скачиваем файл
@@ -99,8 +102,17 @@ async def handle_message(message: Message):
         user = await db.get_or_create_user(user_id)
         user_level = user.get("level", settings.DEFAULT_USER_LEVEL)
         
-        # Показываем индикатор набора текста
-        await message.bot.send_chat_action(user_id, "typing")
+        # Определяем, нужно ли отвечать голосом
+        should_reply_voice = (
+            settings.VOICE_RESPONSE_MODE == "always" or 
+            (settings.VOICE_RESPONSE_MODE == "mirror" and is_voice_input)
+        )
+        
+        # Показываем индикатор (запись голоса или набор текста)
+        if should_reply_voice:
+            await message.bot.send_chat_action(user_id, "record_voice")
+        else:
+            await message.bot.send_chat_action(user_id, "typing")
         
         # Обрабатываем сообщение через Speech Flow AI
         response, analysis_data = await groq_client.process_user_message(
@@ -110,7 +122,26 @@ async def handle_message(message: Message):
         )
         
         # Отправляем ответ
-        await message.answer(response, parse_mode="Markdown")
+        if should_reply_voice:
+            # Генерируем голосовой ответ
+            voice_bytes = await groq_client.text_to_speech(response)
+            
+            if voice_bytes:
+                # Отправляем голосом
+                voice_file = BytesIO(voice_bytes)
+                voice_file.name = "response.ogg"
+                
+                await message.answer_voice(voice_file)
+                
+                # Дублируем текстом для удобства чтения коррекций
+                await message.answer(response, parse_mode="Markdown")
+            else:
+                # Fallback: только текст если TTS не сработал
+                logger.warning("TTS failed, falling back to text response")
+                await message.answer(response, parse_mode="Markdown")
+        else:
+            # Текстовый ответ
+            await message.answer(response, parse_mode="Markdown")
         
     except Exception as e:
         logger.error(f"Error handling message: {e}")
