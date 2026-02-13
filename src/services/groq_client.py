@@ -240,20 +240,24 @@ User Level: {level}
             logger.error(f"❌ Ошибка генерации ответа: {e}")
             return "I'm here to help you practice English. Tell me more!"
     
-    async def text_to_speech(self, text: str) -> Optional[bytes]:
+    async def text_to_speech(self, text: str, voice: Optional[str] = None) -> Optional[bytes]:
         """
         Генерация голоса через Groq TTS
         
         Args:
             text: Текст для озвучивания
+            voice: Голос (autumn, diana, hannah, austin, daniel, troy). По умолчанию из settings.
             
         Returns:
             bytes: Аудио в формате OGG или None в случае ошибки
         """
+        if voice is None:
+            voice = settings.TTS_VOICE
+            
         async def _tts(client):
             response = await client.audio.speech.create(
                 model="canopylabs/orpheus-v1-english",
-                voice="alloy",  # Groq TTS может использовать разные голоса
+                voice=voice,
                 input=text,
                 response_format="opus"  # OGG Opus для Telegram
             )
