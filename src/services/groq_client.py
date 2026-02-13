@@ -138,6 +138,38 @@ class GroqClient:
             logger.error(f"❌ Ошибка генерации ответа: {e}")
             return "I'm here to help you practice English. Tell me more!"
     
+    async def text_to_speech(self, text: str) -> Optional[bytes]:
+        """
+        Генерация голоса через Groq TTS
+        
+        Args:
+            text: Текст для озвучивания
+            
+        Returns:
+            bytes: Аудио в формате OGG или None в случае ошибки
+        """
+        async def _tts(client):
+            response = await client.audio.speech.create(
+                model="canopylabs/orpheus-v1-english",
+                voice="alloy",  # Groq TTS может использовать разные голоса
+                input=text,
+                response_format="opus"  # OGG Opus для Telegram
+            )
+            # response может быть HttpxBinaryResponseContent или bytes
+            if hasattr(response, 'content'):
+                return response.content
+            elif hasattr(response, 'read'):
+                return await response.read()
+            else:
+                return bytes(response)
+        
+        try:
+            result = await self._make_request(_tts)
+            return result
+        except Exception as e:
+            logger.error(f"❌ Ошибка TTS: {e}")
+            return None
+    
     async def process_user_message(self, telegram_id: int, user_text: str, user_level: str) -> Tuple[str, Dict[str, Any]]:
         """Основной метод: параллельные вызовы"""
         try:
