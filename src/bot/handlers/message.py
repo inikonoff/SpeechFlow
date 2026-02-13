@@ -1,7 +1,7 @@
 import logging
 from io import BytesIO
 from aiogram import Router, types
-from aiogram.types import Message
+from aiogram.types import Message, BufferedInputFile
 from aiogram.filters import Command
 
 from src.config import settings, ADMIN_IDS
@@ -127,9 +127,8 @@ async def handle_message(message: Message):
             voice_bytes = await groq_client.text_to_speech(response)
             
             if voice_bytes:
-                # Отправляем голосом (Groq возвращает WAV, Telegram поддерживает)
-                voice_file = BytesIO(voice_bytes)
-                voice_file.name = "response.wav"
+                # Отправляем голосом (используем BufferedInputFile для Telegram)
+                voice_file = BufferedInputFile(voice_bytes, filename="response.wav")
                 
                 await message.answer_voice(voice_file)
                 
