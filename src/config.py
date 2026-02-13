@@ -7,8 +7,8 @@ class Settings(BaseSettings):
     # Telegram
     TELEGRAM_BOT_TOKEN: str
     
-    # Groq API Keys (через запятую)
-    GROQ_API_KEYS: List[str] = []
+    # Groq API Keys (строка с ключами через запятую)
+    GROQ_API_KEYS: str = ""  # ✅ Должна быть строкой, не списком!
     
     # Supabase
     SUPABASE_URL: str
@@ -21,6 +21,14 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         extra = "ignore"
+    
+    @property
+    def groq_api_keys_list(self) -> List[str]:
+        """Преобразует строку с ключами в список"""
+        if not self.GROQ_API_KEYS:
+            return []
+        # Разбиваем по запятой, убираем пробелы, удаляем пустые
+        return [k.strip() for k in self.GROQ_API_KEYS.split(",") if k.strip()]
 
 
 settings = Settings()
