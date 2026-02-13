@@ -58,12 +58,20 @@ class GroqClient:
         
         raise Exception(f"Все Groq клиенты недоступны: {'; '.join(errors[:3])}")
     
-    async def transcribe_audio(self, audio_bytes: bytes) -> str:
-        """Транскрибация голоса через Whisper v3 Turbo на Groq"""
+    async def transcribe_audio(self, audio_bytes: bytes) -> Optional[str]:
+        """
+        Транскрибация голоса через Whisper на Groq
+        
+        Args:
+            audio_bytes: Байты аудиофайла (OGG формат)
+            
+        Returns:
+            str: Распознанный текст или None в случае ошибки
+        """
         async def _transcribe(client):
             response = await client.audio.transcriptions.create(
-                model="whisper-large-v3-turbo",
-                file=("audio.ogg", audio_bytes, "audio/ogg"),
+                model="whisper-large-v3",  # Правильное имя модели для Groq
+                file=("voice.ogg", audio_bytes, "audio/ogg"),  # Явный MIME тип
                 language="en",
                 response_format="text",
                 temperature=0.0
@@ -72,10 +80,17 @@ class GroqClient:
         
         try:
             result = await self._make_request(_transcribe)
-            return result.strip()
+            # Если результат строка, возвращаем как есть, иначе извлекаем текст
+            if isinstance(result, str):
+                return result.strip()
+            elif hasattr(result, 'text'):
+                return result.text.strip()
+            else:
+                return str(result).strip()
         except Exception as e:
             logger.error(f"❌ Ошибка транскрибации: {e}")
-            return f"[Transcription error: {str(e)[:100]}]"
+            # Возвращаем None вместо текста ошибки, чтобы обработать выше
+            return None
     
     async def correct_text(self, text: str, level: str) -> Dict[str, Any]:
         """GPT OSS 120B для коррекции"""
@@ -107,7 +122,7 @@ class GroqClient:
         """Llama 4 Scout для диалога"""
         async def _chat(client):
             response = await client.chat.completions.create(
-                model="llama4-scout-17b-16e-instruct",  # Обновленное имя модели
+                model="llama4-scout-17b-16e-instruct",  # Актуальное имя модели
                 messages=[
                     {"role": "system", "content": f"You are Speech Flow AI, an English conversation tutor. User level: {level}. Keep responses natural and end with a question."},
                     {"role": "user", "content": text}
