@@ -127,9 +127,9 @@ async def handle_message(message: Message):
             voice_bytes = await groq_client.text_to_speech(response)
             
             if voice_bytes:
-                # Отправляем голосом
+                # Отправляем голосом (Groq возвращает WAV, Telegram поддерживает)
                 voice_file = BytesIO(voice_bytes)
-                voice_file.name = "response.ogg"
+                voice_file.name = "response.wav"
                 
                 await message.answer_voice(voice_file)
                 
