@@ -4,6 +4,7 @@ from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject
 
 from src.services.supabase_db import db
+from src.config import ADMIN_IDS  # ✅ Импортируем отдельно
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,8 @@ class UserMiddleware(BaseMiddleware):
                 # Загружаем данные пользователя
                 user = await db.get_or_create_user(user_id)
                 data["user"] = user
-                data["is_admin"] = await db.is_admin(user_id)
+                # ✅ Используем ADMIN_IDS из конфига
+                data["is_admin"] = user_id in ADMIN_IDS
             except Exception as e:
                 logger.error(f"Error loading user {user_id}: {e}")
                 data["user"] = {}
