@@ -20,9 +20,33 @@ class Settings(BaseSettings):
     VOICE_RESPONSE_MODE: str = "mirror"  # "always", "mirror", "never"
     TTS_VOICE: str = "autumn"  # Groq Orpheus: autumn, diana, hannah, austin, daniel, troy
     
-    # TTS Provider settings
-    TTS_PROVIDER: str = "groq"  # "groq" или "piper"
-    PIPER_TTS_URL: str = ""  # URL Piper TTS сервиса (если используется)
+    # TTS Provider settings - читается из .env
+    TTS_PROVIDER: Optional[str] = None  # "groq" или "piper" - ОБЯЗАТЕЛЬНО указать в .env!
+    PIPER_TTS_URL: Optional[str] = None  # URL Piper TTS сервиса (обязательно для piper)
+    
+    def __init__(self, **data):
+        super().__init__(**data)
+        
+        # Валидация TTS настроек
+        if not self.TTS_PROVIDER:
+            raise ValueError(
+                "⚠️ TTS_PROVIDER не указан в .env!\n"
+                "Добавьте в .env одну из строк:\n"
+                "  TTS_PROVIDER=groq  (платный, лучшее качество)\n"
+                "  TTS_PROVIDER=piper (бесплатный, нужен PIPER_TTS_URL)"
+            )
+        
+        if self.TTS_PROVIDER not in ["groq", "piper"]:
+            raise ValueError(
+                f"⚠️ Неверное значение TTS_PROVIDER: {self.TTS_PROVIDER}\n"
+                f"Доступные значения: 'groq' или 'piper'"
+            )
+        
+        if self.TTS_PROVIDER == "piper" and not self.PIPER_TTS_URL:
+            raise ValueError(
+                "⚠️ Для TTS_PROVIDER=piper нужно указать PIPER_TTS_URL в .env!\n"
+                "Например: PIPER_TTS_URL=https://piper-tts-service.onrender.com"
+            )
     
     class Config:
         env_file = ".env"
