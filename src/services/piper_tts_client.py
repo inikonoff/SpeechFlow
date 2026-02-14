@@ -1,341 +1,164 @@
-import random
-import asyncio
 import logging
-import json
-from typing import List, Optional, Dict, Any, Tuple
-from openai import AsyncOpenAI
-
-from src.config import settings
+import io
+import wave
+import subprocess
+import asyncio
+import aiohttp
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Импорт Piper TTS клиента (опционально)
-try:
-    from src.services.piper_tts_client import PiperTTSClient
-    piper_client = PiperTTSClient(settings.PIPER_TTS_URL) if settings.PIPER_TTS_URL else None
-except ImportError:
-    piper_client = None
-    logger.warning("Piper TTS client not available")
 
-
-class GroqClient:
-    def __init__(self, api_keys: List[str]):
-        self.clients = []
-        self.current_index = 0
-        
-        # Инициализируем клиенты для round-robin
-        for key in api_keys:
-            if key.strip():
-                self.clients.append(
-                    AsyncOpenAI(
-                        api_key=key.strip(),
-                        base_url="https://api.groq.com/openai/v1",
-                        timeout=60.0
-                    )
-                )
-        logger.info(f"✅ Инициализировано {len(self.clients)} Groq клиентов")
+class PiperTTSClient:
+    """Клиент для взаимодействия с оптимизированным Piper TTS сервисом"""
     
-    def _get_next_client(self) -> Optional[AsyncOpenAI]:
-        """Round-robin выбор следующего клиента"""
-        if not self.clients:
-            return None
-        
-        client = self.clients[self.current_index]
-        self.current_index = (self.current_index + 1) % len(self.clients)
-        return client
-    
-    async def _make_request(self, func, *args, **kwargs):
-        """Универсальный метод с retry и балансировкой"""
-        if not self.clients:
-            raise Exception("Нет доступных Groq клиентов")
-        
-        errors = []
-        
-        # Пробуем каждый ключ до 2 раз
-        for attempt in range(len(self.clients) * 2):
-            client = self._get_next_client()
-            if not client:
-                break
-            
-            try:
-                return await func(client, *args, **kwargs)
-            except Exception as e:
-                errors.append(str(e))
-                logger.warning(f"❌ Groq request failed (attempt {attempt + 1}): {e}")
-                await asyncio.sleep(0.5 + random.random())  # Jitter
-        
-        raise Exception(f"Все Groq клиенты недоступны: {'; '.join(errors[:3])}")
-    
-    async def transcribe_audio(self, audio_bytes: bytes) -> Optional[str]:
+    def __init__(self, base_url: str, timeout: int = 30):
         """
-        Транскрибация голоса через Whisper на Groq
+        Args:
+            base_url: URL Piper TTS сервиса (например, http://localhost:8000)
+            timeout: Таймаут запроса в секундах
+        """
+        self.base_url = base_url.rstrip('/')
+        self.timeout = timeout
+        self.session: Optional[aiohttp.ClientSession] = None
+        logger.info(f"✅ PiperTTSClient initialized with URL: {self.base_url}")
+    
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Получение или создание сессии"""
+        if self.session is None or self.session.closed:
+            self.session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=self.timeout)
+            )
+        return self.session
+    
+    async def _convert_wav_to_ogg(self, wav_bytes: bytes) -> Optional[bytes]:
+        """
+        Конвертирует WAV в OGG Opus с помощью ffmpeg
         
         Args:
-            audio_bytes: Байты аудиофайла (OGG формат)
+            wav_bytes: Байты WAV файла
             
         Returns:
-            str: Распознанный текст или None в случае ошибки
+            bytes: OGG Opus файл или None в случае ошибки
         """
-        async def _transcribe(client):
-            response = await client.audio.transcriptions.create(
-                model="whisper-large-v3",  # Правильное имя модели для Groq
-                file=("voice.ogg", audio_bytes, "audio/ogg"),  # Явный MIME тип
-                language="en",
-                response_format="text",
-                temperature=0.0
-            )
-            return response
-        
         try:
-            result = await self._make_request(_transcribe)
-            # Если результат строка, возвращаем как есть, иначе извлекаем текст
-            if isinstance(result, str):
-                return result.strip()
-            elif hasattr(result, 'text'):
-                return result.text.strip()
-            else:
-                return str(result).strip()
+            # Запускаем ffmpeg для конвертации
+            process = await asyncio.create_subprocess_exec(
+                'ffmpeg',
+                '-i', 'pipe:0',           # Вход из stdin
+                '-c:a', 'libopus',          # Кодек Opus
+                '-b:a', '32k',              # Битрейт 32 kbps (стандарт для Telegram)
+                '-ar', '24000',              # Частота 24 кГц
+                '-application', 'voip',      # Оптимизация для речи
+                '-frame_duration', '60',     # Длительность фрейма
+                '-packet_loss', '1',          # Устойчивость к потерям
+                '-f', 'ogg',                  # Выходной формат OGG
+                'pipe:1',                     # Выход в stdout
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            
+            # Отправляем WAV в stdin и получаем результат
+            stdout, stderr = await process.communicate(input=wav_bytes)
+            
+            if process.returncode != 0:
+                logger.error(f"FFmpeg conversion error: {stderr.decode()}")
+                return None
+            
+            logger.info(f"✅ Converted WAV ({len(wav_bytes)} bytes) to OGG ({len(stdout)} bytes)")
+            return stdout
+            
+        except FileNotFoundError:
+            logger.error("❌ FFmpeg not found. Please install ffmpeg on the system")
+            # Fallback: возвращаем как есть (Telegram не примет, но хотя бы не упадем)
+            return wav_bytes
         except Exception as e:
-            logger.error(f"❌ Ошибка транскрибации: {e}")
-            # Возвращаем None вместо текста ошибки, чтобы обработать выше
+            logger.error(f"❌ Error converting to OGG: {e}")
             return None
     
-    async def correct_text(self, text: str, level: str) -> Dict[str, Any]:
-        """GPT OSS 120B для коррекции с улучшенным промптом"""
-        
-        system_prompt = """# ROLE
-You are an elite ESL Professor with 15+ years of experience. Your goal is to analyze the user's input with surgical precision, provide actionable corrections, and explain the underlying logic in a way that accelerates fluency.
-
-# LEVEL-ADAPTIVE PEDAGOGY
-## BEGINNER (A1-A2)
-- Focus: Basic Tenses (Present/Past/Future Simple), Articles (a/an/the), Subject-Verb Agreement, Word Order
-- Explanation style: 100% Russian, nurturing tone
-- Vocabulary items: Only high-frequency words (Top 1000)
-
-## ELEMENTARY (A2-B1)
-- Focus: Present Perfect, Prepositions, Common Phrasal Verbs, Comparatives
-- Explanation style: 60% Russian / 40% English
-- Vocabulary items: Everyday collocations
-
-## INTERMEDIATE (B1-B2)
-- Focus: Conditionals, Reported Speech, Collocations, Phrasal Verbs with multiple meanings
-- Explanation style: 30% Russian / 70% English
-- Vocabulary items: Academic/professional terms
-
-## ADVANCED (C1-C2)
-- Focus: Subjunctive Mood, Inversion, Nuance, Register, Stylistic choices
-- Explanation style: 100% English, sophisticated metalanguage
-- Vocabulary items: Rare synonyms, idiomatic expressions
-
-# OUTPUT FORMAT (JSON ONLY)
-{
-  "corrected_sentence": "[Full corrected sentence - if perfect, return original]",
-  "explanation": "[Level-appropriate explanation, max 2 sentences, focus on WHY]",
-  "vocabulary_items": [
-    {
-      "word_or_phrase": "...",
-      "translation": "...",
-      "context_sentence": "...",
-      "mastery_score": 0
-    }
-  ],
-  "error_category": "grammar|vocabulary|pronunciation|structure|style|none"
-}"""
-        
-        async def _correct(client):
-            response = await client.chat.completions.create(
-                model="openai/gpt-oss-120b",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"LEVEL: {level}\nUSER TEXT: {text}\n\nAnalyze and correct."}
-                ],
-                temperature=0.0,
-                response_format={"type": "json_object"}
-            )
-            return response.choices[0].message.content
-        
-        try:
-            result = await self._make_request(_correct)
-            return json.loads(result)
-        except Exception as e:
-            logger.error(f"❌ Ошибка коррекции: {e}")
-            return {
-                "corrected_sentence": text,
-                "explanation": "Correction service unavailable.",
-                "vocabulary_items": [],
-                "error_category": "None"
-            }
-    
-    async def generate_response(self, text: str, level: str) -> str:
-        """Llama 4 Scout для диалога с улучшенным промптом"""
-        
-        system_prompt = f"""# ROLE
-You are "Speech Flow AI", a charismatic English conversation partner who makes learners WANT to keep talking. You balance being supportive with gently pushing boundaries (i+1 principle).
-
-# LEVEL-ADAPTIVE COMMUNICATION MATRIX
-
-## BEGINNER (A1-A2)
-- Vocabulary: Top 500 words only
-- Grammar: Present/Past/Future Simple, "can", "there is/are"
-- Sentence length: 5-8 words max
-- Questions: Binary choice or Yes/No
-  Example: "Do you like coffee or tea?"
-
-## ELEMENTARY (A2-B1)
-- Vocabulary: Top 1500 words + basic adjectives
-- Grammar: Present Perfect, "going to", basic modals
-- Sentence length: 8-12 words
-- Questions: Simple "Wh-" questions, "Have you ever...?"
-  Example: "What did you do last weekend?"
-
-## INTERMEDIATE (B1-B2)
-- Vocabulary: 3000+ words, idioms, phrasal verbs
-- Grammar: All tenses, conditionals, passive voice
-- Sentence length: 10-15 words
-- Questions: Open-ended, opinion-based
-  Example: "What's the most challenging part of learning English for you?"
-
-## ADVANCED (C1-C2)
-- Vocabulary: Academic/business, subtle nuances, literary expressions
-- Grammar: Subjunctive, inversion, cleft sentences
-- Sentence length: Natural (15-20 words)
-- Questions: Abstract, provocative, philosophical
-  Example: "How do you think AI will reshape the job market in the next decade?"
-
-# CONVERSATION ENGINEERING RULES
-
-1. **NEVER repeat the user's mistakes**
-   - If user says "I go yesterday", respond naturally: "Oh, you went somewhere yesterday? Where did you go?"
-
-2. **ALWAYS end with ONE question**
-   - Use varied question types (avoid repetition)
-   - Make questions feel like natural curiosity, not interrogation
-
-3. **Match energy + 1**
-   - Keep responses SHORT: 2-3 sentences max
-   - Reference their previous messages when possible
-
-4. **Avoid teacher mode**
-   - Just have a natural conversation
-   - Don't say "Good job!" or give explicit corrections
-
-# RESPONSE LENGTH
-- Beginner: 1-2 sentences + question
-- Elementary: 2 sentences + question
-- Intermediate: 2-3 sentences + question
-- Advanced: 3 sentences + question
-
-# CURRENT CONTEXT
-User Level: {level}
-
-# YOUR RESPONSE (2-3 sentences + question):"""
-        
-        async def _chat(client):
-            response = await client.chat.completions.create(
-                model="meta-llama/llama-4-scout-17b-16e-instruct",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": text}
-                ],
-                temperature=0.8,
-                max_tokens=400
-            )
-            return response.choices[0].message.content
-        
-        try:
-            return await self._make_request(_chat)
-        except Exception as e:
-            logger.error(f"❌ Ошибка генерации ответа: {e}")
-            return "I'm here to help you practice English. Tell me more!"
-    
-    async def text_to_speech(self, text: str, voice: Optional[str] = None) -> Optional[bytes]:
+    async def text_to_speech(self, text: str) -> Optional[bytes]:
         """
-        Генерация голоса через Groq TTS или Piper TTS
+        Генерация речи из текста через Piper TTS сервис и конвертация в OGG
         
         Args:
             text: Текст для озвучивания
-            voice: Голос (autumn, diana, hannah, austin, daniel, troy для Groq). По умолчанию из settings.
             
         Returns:
-            bytes: Аудио в формате WAV или None в случае ошибки
+            bytes: Аудио в формате OGG Opus или None в случае ошибки
         """
-        # Выбираем провайдера TTS
-        if settings.TTS_PROVIDER == "piper" and piper_client:
-            return await self._text_to_speech_piper(text)
-        else:
-            return await self._text_to_speech_groq(text, voice)
-    
-    async def _text_to_speech_piper(self, text: str) -> Optional[bytes]:
-        """TTS через Piper (бесплатный)"""
-        try:
-            logger.info(f"Using Piper TTS for {len(text)} characters...")
-            audio_bytes = await piper_client.text_to_speech(text)
-            if audio_bytes:
-                logger.info(f"✅ Piper TTS success: {len(audio_bytes)} bytes")
-            return audio_bytes
-        except Exception as e:
-            logger.error(f"❌ Piper TTS error: {e}")
+        if not text or not text.strip():
+            logger.warning("Empty text provided to TTS")
             return None
-    
-    async def _text_to_speech_groq(self, text: str, voice: Optional[str] = None) -> Optional[bytes]:
-        """TTS через Groq (платный)"""
-        if voice is None:
-            voice = settings.TTS_VOICE
-            
-        async def _tts(client):
-            response = await client.audio.speech.create(
-                model="canopylabs/orpheus-v1-english",
-                voice=voice,
-                input=text,
-                response_format="wav"  # Groq поддерживает только WAV
-            )
-            # response может быть HttpxBinaryResponseContent или bytes
-            if hasattr(response, 'content'):
-                return response.content
-            elif hasattr(response, 'read'):
-                return await response.read()
-            else:
-                return bytes(response)
         
         try:
-            result = await self._make_request(_tts)
-            return result
+            session = await self._get_session()
+            
+            # Используем streaming endpoint
+            async with session.post(
+                f"{self.base_url}/tts/stream",
+                json={"text": text, "voice": "amy"}
+            ) as response:
+                
+                if response.status != 200:
+                    logger.error(f"Piper TTS error: HTTP {response.status}")
+                    return None
+                
+                # Собираем все чанки WAV
+                wav_chunks = []
+                async for chunk in response.content.iter_chunked(8192):
+                    if chunk:
+                        wav_chunks.append(chunk)
+                
+                if not wav_chunks:
+                    logger.error("No audio data received from Piper")
+                    return None
+                
+                # Объединяем чанки в один WAV файл
+                wav_data = b''.join(wav_chunks)
+                logger.info(f"✅ Received WAV from Piper: {len(wav_data)} bytes")
+                
+                # Конвертируем WAV в OGG
+                ogg_data = await self._convert_wav_to_ogg(wav_data)
+                
+                if ogg_data:
+                    return ogg_data
+                else:
+                    # Если конвертация не удалась, логируем и возвращаем None
+                    logger.error("Failed to convert WAV to OGG")
+                    return None
+                
+        except asyncio.TimeoutError:
+            logger.error("Piper TTS request timed out")
+            return None
+        except aiohttp.ClientError as e:
+            logger.error(f"Piper TTS connection error: {e}")
+            return None
         except Exception as e:
-            logger.error(f"❌ Ошибка Groq TTS: {e}")
+            logger.error(f"Unexpected Piper TTS error: {e}")
             return None
     
-    async def process_user_message(self, telegram_id: int, user_text: str, user_level: str) -> Tuple[str, Dict[str, Any]]:
-        """Основной метод: параллельные вызовы"""
+    async def health_check(self) -> bool:
+        """Проверка доступности Piper сервиса"""
         try:
-            # Параллельные вызовы
-            correction_task = self.correct_text(user_text, user_level)
-            response_task = self.generate_response(user_text, user_level)
-            
-            correction_result, chat_response = await asyncio.gather(correction_task, response_task)
-            
-            # Формируем финальный ПОЛНЫЙ ответ (для текстового режима)
-            final_response = f"""💬 **Chat Response:**
-{chat_response}
-
-🔧 **Correction & Analysis:**
-{correction_result.get('corrected_sentence', user_text)}
-
-💡 **Why:**
-{correction_result.get('explanation', 'No corrections needed.')}"""
-            
-            if correction_result.get('vocabulary_items'):
-                final_response += "\n\n📚 *New words added to your vocabulary*"
-            
-            # Добавляем chat_response в analysis_data для голосового режима
-            analysis_data = correction_result.copy()
-            analysis_data['chat_response'] = chat_response
-            
-            return final_response, analysis_data
-            
+            session = await self._get_session()
+            async with session.get(f"{self.base_url}/health") as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data.get("status") == "healthy" and data.get("model_loaded", False)
+                return False
         except Exception as e:
-            logger.error(f"Error processing message: {e}")
-            return "Sorry, I encountered an error. Please try again.", {}
-
-
-# ✅ СОЗДАЕМ ГЛОБАЛЬНЫЙ ЭКЗЕМПЛЯР
-groq_client = GroqClient(settings.groq_api_keys_list)
+            logger.error(f"Piper health check failed: {e}")
+            return False
+    
+    async def close(self):
+        """Закрытие сессии"""
+        if self.session and not self.session.closed:
+            await self.session.close()
+            logger.info("PiperTTSClient session closed")
+    
+    async def __aenter__(self):
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
