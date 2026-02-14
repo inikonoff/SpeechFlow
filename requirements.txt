@@ -13,6 +13,9 @@ openai==1.52.0
 # Supabase
 supabase==2.6.0
 
+# HTTP клиент (уже есть aiohttp)
+# Piper TTS клиент использует aiohttp
+
 # Build
 setuptools==75.1.0
 wheel==0.44.0
