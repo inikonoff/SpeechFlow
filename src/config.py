@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     VOICE_RESPONSE_MODE: str = "mirror"  # "always", "mirror", "never"
     TTS_VOICE: str = "autumn"  # Groq Orpheus: autumn, diana, hannah, austin, daniel, troy
     
+    # TTS Provider settings
+    TTS_PROVIDER: str = "groq"  # "groq" или "piper"
+    PIPER_TTS_URL: str = ""  # URL Piper TTS сервиса (если используется)
+    
     class Config:
         env_file = ".env"
         extra = "ignore"
