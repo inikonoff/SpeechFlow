@@ -13,10 +13,14 @@ logger = logging.getLogger(__name__)
 try:
     from src.services.piper_tts_client import PiperTTSClient
     piper_client = PiperTTSClient(settings.PIPER_TTS_URL) if settings.PIPER_TTS_URL else None
+    if piper_client:
+        logger.info(f"✅ Piper TTS client initialized with URL: {settings.PIPER_TTS_URL}")
 except ImportError:
     piper_client = None
-    logger.warning("Piper TTS client not available")
-
+    logger.warning("⚠️ Piper TTS client not available (optional)")
+except Exception as e:
+    piper_client = None
+    logger.warning(f"⚠️ Piper TTS client initialization failed: {e}")
 
 class GroqClient:
     def __init__(self, api_keys: List[str]):
