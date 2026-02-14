@@ -285,7 +285,7 @@ User Level: {level}
             
             correction_result, chat_response = await asyncio.gather(correction_task, response_task)
             
-            # Формируем финальный ответ
+            # Формируем финальный ПОЛНЫЙ ответ (для текстового режима)
             final_response = f"""💬 **Chat Response:**
 {chat_response}
 
@@ -298,7 +298,11 @@ User Level: {level}
             if correction_result.get('vocabulary_items'):
                 final_response += "\n\n📚 *New words added to your vocabulary*"
             
-            return final_response, correction_result
+            # Добавляем chat_response в analysis_data для голосового режима
+            analysis_data = correction_result.copy()
+            analysis_data['chat_response'] = chat_response
+            
+            return final_response, analysis_data
             
         except Exception as e:
             logger.error(f"Error processing message: {e}")
