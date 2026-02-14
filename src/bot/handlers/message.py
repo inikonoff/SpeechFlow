@@ -108,6 +108,9 @@ async def handle_message(message: Message):
             (settings.VOICE_RESPONSE_MODE == "mirror" and is_voice_input)
         )
         
+        # Отладочный лог
+        logger.info(f"Voice response mode: {settings.VOICE_RESPONSE_MODE}, is_voice_input: {is_voice_input}, should_reply_voice: {should_reply_voice}")
+        
         # Показываем индикатор (запись голоса или набор текста)
         if should_reply_voice:
             await message.bot.send_chat_action(user_id, "record_voice")
@@ -121,25 +124,45 @@ async def handle_message(message: Message):
             user_level=user_level
         )
         
-        # Отправляем ответ
+        # Отправляем ответ в стиле Engify:
+        # 1. Сначала анализ текстом (коррекция + объяснение)
+        # 2. Потом диалог голосом (если включено)
+        
         if should_reply_voice:
-            # Генерируем голосовой ответ
-            voice_bytes = await groq_client.text_to_speech(response)
+            # Формируем анализ (только коррекция)
+            analysis_text = f"""✅ **Correct**
+{analysis_data.get('corrected_sentence', user_text)}
+
+💡 **Why**
+{analysis_data.get('explanation', 'No corrections needed.')}"""
+            
+            if analysis_data.get('vocabulary_items'):
+                analysis_text += "\n\n📚 *New words added to your vocabulary*"
+            
+            # 1. Отправляем анализ текстом
+            await message.answer(analysis_text, parse_mode="Markdown")
+            
+            # 2. Генерируем голосовой ответ (только диалог)
+            logger.info("Generating voice response...")
+            chat_response = analysis_data.get('chat_response', response)
+            voice_bytes = await groq_client.text_to_speech(chat_response)
             
             if voice_bytes:
-                # Отправляем голосом (используем BufferedInputFile для Telegram)
+                logger.info(f"Voice generated successfully: {len(voice_bytes)} bytes")
+                # Отправляем голосом
                 voice_file = BufferedInputFile(voice_bytes, filename="response.wav")
-                
                 await message.answer_voice(voice_file)
+                logger.info("Voice message sent")
                 
-                # Дублируем текстом для удобства чтения коррекций
-                await message.answer(response, parse_mode="Markdown")
+                # Дублируем диалог текстом для удобства
+                await message.answer(f"💬 {chat_response}", parse_mode="Markdown")
             else:
                 # Fallback: только текст если TTS не сработал
-                logger.warning("TTS failed, falling back to text response")
-                await message.answer(response, parse_mode="Markdown")
+                logger.warning("TTS failed, sending chat response as text")
+                await message.answer(f"💬 {chat_response}", parse_mode="Markdown")
         else:
-            # Текстовый ответ
+            # Текстовый режим: весь ответ текстом
+            logger.info("Sending text-only response")
             await message.answer(response, parse_mode="Markdown")
         
     except Exception as e:
