@@ -9,6 +9,14 @@ from src.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Импорт Piper TTS клиента (опционально)
+try:
+    from src.services.piper_tts_client import PiperTTSClient
+    piper_client = PiperTTSClient(settings.PIPER_TTS_URL) if settings.PIPER_TTS_URL else None
+except ImportError:
+    piper_client = None
+    logger.warning("Piper TTS client not available")
+
 
 class GroqClient:
     def __init__(self, api_keys: List[str]):
@@ -242,15 +250,35 @@ User Level: {level}
     
     async def text_to_speech(self, text: str, voice: Optional[str] = None) -> Optional[bytes]:
         """
-        Генерация голоса через Groq TTS
+        Генерация голоса через Groq TTS или Piper TTS
         
         Args:
             text: Текст для озвучивания
-            voice: Голос (autumn, diana, hannah, austin, daniel, troy). По умолчанию из settings.
+            voice: Голос (autumn, diana, hannah, austin, daniel, troy для Groq). По умолчанию из settings.
             
         Returns:
-            bytes: Аудио в формате WAV (Telegram поддерживает) или None в случае ошибки
+            bytes: Аудио в формате WAV или None в случае ошибки
         """
+        # Выбираем провайдера TTS
+        if settings.TTS_PROVIDER == "piper" and piper_client:
+            return await self._text_to_speech_piper(text)
+        else:
+            return await self._text_to_speech_groq(text, voice)
+    
+    async def _text_to_speech_piper(self, text: str) -> Optional[bytes]:
+        """TTS через Piper (бесплатный)"""
+        try:
+            logger.info(f"Using Piper TTS for {len(text)} characters...")
+            audio_bytes = await piper_client.text_to_speech(text)
+            if audio_bytes:
+                logger.info(f"✅ Piper TTS success: {len(audio_bytes)} bytes")
+            return audio_bytes
+        except Exception as e:
+            logger.error(f"❌ Piper TTS error: {e}")
+            return None
+    
+    async def _text_to_speech_groq(self, text: str, voice: Optional[str] = None) -> Optional[bytes]:
+        """TTS через Groq (платный)"""
         if voice is None:
             voice = settings.TTS_VOICE
             
@@ -273,7 +301,7 @@ User Level: {level}
             result = await self._make_request(_tts)
             return result
         except Exception as e:
-            logger.error(f"❌ Ошибка TTS: {e}")
+            logger.error(f"❌ Ошибка Groq TTS: {e}")
             return None
     
     async def process_user_message(self, telegram_id: int, user_text: str, user_level: str) -> Tuple[str, Dict[str, Any]]:
