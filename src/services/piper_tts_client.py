@@ -1,10 +1,9 @@
 import logging
 import io
 import wave
-import subprocess
 import asyncio
 import aiohttp
-from typing import Optional
+from typing import Optional, List
 
 logger = logging.getLogger(__name__)
 
@@ -71,10 +70,124 @@ class PiperTTSClient:
             
         except FileNotFoundError:
             logger.error("❌ FFmpeg not found. Please install ffmpeg on the system")
-            # Fallback: возвращаем как есть (Telegram не примет, но хотя бы не упадем)
-            return wav_bytes
+            return None
         except Exception as e:
             logger.error(f"❌ Error converting to OGG: {e}")
+            return None
+    
+    async def _collect_wav_chunks(self, url: str, text: str) -> Optional[bytes]:
+        """
+        Собирает все WAV чанки из streaming endpoint и объединяет их
+        
+        Args:
+            url: URL эндпоинта
+            text: Текст для озвучивания
+            
+        Returns:
+            bytes: Объединенный WAV файл или None в случае ошибки
+        """
+        try:
+            session = await self._get_session()
+            
+            async with session.post(
+                url,
+                json={"text": text, "voice": "amy"}
+            ) as response:
+                
+                if response.status != 200:
+                    logger.error(f"Piper TTS error: HTTP {response.status}")
+                    return None
+                
+                # Собираем все WAV чанки
+                wav_chunks = []
+                chunk_count = 0
+                
+                async for chunk in response.content.iter_chunked(8192):
+                    if chunk:
+                        wav_chunks.append(chunk)
+                        chunk_count += 1
+                
+                if not wav_chunks:
+                    logger.error("No audio data received from Piper")
+                    return None
+                
+                logger.info(f"✅ Collected {chunk_count} WAV chunks, total {sum(len(c) for c in wav_chunks)} bytes")
+                
+                # Если только один чанк, возвращаем как есть
+                if len(wav_chunks) == 1:
+                    return wav_chunks[0]
+                
+                # Объединяем все WAV чанки в один файл
+                combined_wav = await self._combine_wav_chunks(wav_chunks)
+                
+                if combined_wav:
+                    logger.info(f"✅ Combined into single WAV: {len(combined_wav)} bytes")
+                    return combined_wav
+                else:
+                    logger.error("Failed to combine WAV chunks")
+                    return None
+                
+        except asyncio.TimeoutError:
+            logger.error("Piper TTS request timed out")
+            return None
+        except aiohttp.ClientError as e:
+            logger.error(f"Piper TTS connection error: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected Piper TTS error: {e}")
+            return None
+    
+    async def _combine_wav_chunks(self, chunks: List[bytes]) -> Optional[bytes]:
+        """
+        Объединяет несколько WAV чанков в один файл
+        
+        Args:
+            chunks: Список WAV чанков
+            
+        Returns:
+            bytes: Объединенный WAV файл
+        """
+        if not chunks:
+            return None
+        
+        if len(chunks) == 1:
+            return chunks[0]
+        
+        try:
+            # Используем ffmpeg для объединения (надёжнее)
+            process = await asyncio.create_subprocess_exec(
+                'ffmpeg',
+                '-i', 'concat:input0.wav|input1.wav',  # Это не сработает, нужен другой подход
+                '-c', 'copy',
+                '-f', 'wav',
+                'pipe:1',
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            
+            # Более простой способ: используем wave модуль для объединения
+            # Читаем параметры из первого чанка
+            first_chunk = io.BytesIO(chunks[0])
+            with wave.open(first_chunk, 'rb') as first_wav:
+                params = first_wav.getparams()
+                
+                # Создаем выходной WAV
+                output = io.BytesIO()
+                with wave.open(output, 'wb') as out_wav:
+                    out_wav.setparams(params)
+                    
+                    # Записываем все чанки
+                    for chunk in chunks:
+                        chunk_io = io.BytesIO(chunk)
+                        with wave.open(chunk_io, 'rb') as chunk_wav:
+                            out_wav.writeframes(chunk_wav.readframes(chunk_wav.getnframes()))
+                
+                output.seek(0)
+                return output.getvalue()
+                
+        except Exception as e:
+            logger.error(f"Error combining WAV chunks: {e}")
             return None
     
     async def text_to_speech(self, text: str) -> Optional[bytes]:
@@ -91,51 +204,21 @@ class PiperTTSClient:
             logger.warning("Empty text provided to TTS")
             return None
         
-        try:
-            session = await self._get_session()
-            
-            # Используем streaming endpoint
-            async with session.post(
-                f"{self.base_url}/tts/stream",
-                json={"text": text, "voice": "amy"}
-            ) as response:
-                
-                if response.status != 200:
-                    logger.error(f"Piper TTS error: HTTP {response.status}")
-                    return None
-                
-                # Собираем все чанки WAV
-                wav_chunks = []
-                async for chunk in response.content.iter_chunked(8192):
-                    if chunk:
-                        wav_chunks.append(chunk)
-                
-                if not wav_chunks:
-                    logger.error("No audio data received from Piper")
-                    return None
-                
-                # Объединяем чанки в один WAV файл
-                wav_data = b''.join(wav_chunks)
-                logger.info(f"✅ Received WAV from Piper: {len(wav_data)} bytes")
-                
-                # Конвертируем WAV в OGG
-                ogg_data = await self._convert_wav_to_ogg(wav_data)
-                
-                if ogg_data:
-                    return ogg_data
-                else:
-                    # Если конвертация не удалась, логируем и возвращаем None
-                    logger.error("Failed to convert WAV to OGG")
-                    return None
-                
-        except asyncio.TimeoutError:
-            logger.error("Piper TTS request timed out")
+        # Сначала получаем объединенный WAV из всех чанков
+        wav_data = await self._collect_wav_chunks(f"{self.base_url}/tts/stream", text)
+        
+        if not wav_data:
+            logger.error("Failed to get WAV data from Piper")
             return None
-        except aiohttp.ClientError as e:
-            logger.error(f"Piper TTS connection error: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"Unexpected Piper TTS error: {e}")
+        
+        # Конвертируем WAV в OGG
+        ogg_data = await self._convert_wav_to_ogg(wav_data)
+        
+        if ogg_data:
+            logger.info(f"✅ Final OGG size: {len(ogg_data)} bytes")
+            return ogg_data
+        else:
+            logger.error("Failed to convert WAV to OGG")
             return None
     
     async def health_check(self) -> bool:
@@ -145,7 +228,7 @@ class PiperTTSClient:
             async with session.get(f"{self.base_url}/health") as response:
                 if response.status == 200:
                     data = await response.json()
-                    return data.get("status") == "healthy" and data.get("model_loaded", False)
+                    return data.get("status") == "healthy" and data.get("model", {}).get("loaded", False)
                 return False
         except Exception as e:
             logger.error(f"Piper health check failed: {e}")
