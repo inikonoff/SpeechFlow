@@ -3,6 +3,7 @@ import asyncio
 import logging
 import json
 from typing import List, Optional, Dict, Any, Tuple
+from datetime import datetime
 from openai import AsyncOpenAI
 
 from src.config import settings
@@ -15,12 +16,15 @@ try:
     piper_client = PiperTTSClient(settings.PIPER_TTS_URL) if settings.PIPER_TTS_URL else None
     if piper_client:
         logger.info(f"✅ Piper TTS client initialized with URL: {settings.PIPER_TTS_URL}")
+    else:
+        logger.info("ℹ️ Piper TTS client not configured")
 except ImportError:
     piper_client = None
-    logger.warning("⚠️ Piper TTS client not available (optional)")
+    logger.info("ℹ️ Piper TTS client not available (optional)")
 except Exception as e:
     piper_client = None
     logger.warning(f"⚠️ Piper TTS client initialization failed: {e}")
+
 
 class GroqClient:
     def __init__(self, api_keys: List[str]):
@@ -91,17 +95,20 @@ class GroqClient:
             return response
         
         try:
+            logger.info("🎤 Transcribing audio with Whisper...")
             result = await self._make_request(_transcribe)
             # Если результат строка, возвращаем как есть, иначе извлекаем текст
             if isinstance(result, str):
-                return result.strip()
+                text = result.strip()
             elif hasattr(result, 'text'):
-                return result.text.strip()
+                text = result.text.strip()
             else:
-                return str(result).strip()
+                text = str(result).strip()
+            
+            logger.info(f"✅ Transcription result: {text[:100]}...")
+            return text
         except Exception as e:
             logger.error(f"❌ Ошибка транскрибации: {e}")
-            # Возвращаем None вместо текста ошибки, чтобы обработать выше
             return None
     
     async def correct_text(self, text: str, level: str) -> Dict[str, Any]:
@@ -159,19 +166,22 @@ You are an elite ESL Professor with 15+ years of experience. Your goal is to ana
             return response.choices[0].message.content
         
         try:
+            logger.info(f"🔍 Correcting text for level {level}...")
             result = await self._make_request(_correct)
-            return json.loads(result)
+            parsed = json.loads(result)
+            logger.info(f"✅ Correction complete: {parsed.get('error_category', 'unknown')}")
+            return parsed
         except Exception as e:
             logger.error(f"❌ Ошибка коррекции: {e}")
             return {
                 "corrected_sentence": text,
                 "explanation": "Correction service unavailable.",
                 "vocabulary_items": [],
-                "error_category": "None"
+                "error_category": "none"
             }
     
     async def generate_response(self, text: str, level: str) -> str:
-        """Llama 4 Scout для диалога с улучшенным промптом"""
+        """Llama 4 Scout для диалога - только длина ответа изменена"""
         
         system_prompt = f"""# ROLE
 You are "Speech Flow AI", a charismatic English conversation partner who makes learners WANT to keep talking. You balance being supportive with gently pushing boundaries (i+1 principle).
@@ -181,28 +191,28 @@ You are "Speech Flow AI", a charismatic English conversation partner who makes l
 ## BEGINNER (A1-A2)
 - Vocabulary: Top 500 words only
 - Grammar: Present/Past/Future Simple, "can", "there is/are"
-- Sentence length: 5-8 words max
+- Sentence length: 4-6 words max
 - Questions: Binary choice or Yes/No
   Example: "Do you like coffee or tea?"
 
 ## ELEMENTARY (A2-B1)
 - Vocabulary: Top 1500 words + basic adjectives
 - Grammar: Present Perfect, "going to", basic modals
-- Sentence length: 8-12 words
+- Sentence length: 6-10 words
 - Questions: Simple "Wh-" questions, "Have you ever...?"
   Example: "What did you do last weekend?"
 
 ## INTERMEDIATE (B1-B2)
 - Vocabulary: 3000+ words, idioms, phrasal verbs
 - Grammar: All tenses, conditionals, passive voice
-- Sentence length: 10-15 words
+- Sentence length: 8-12 words
 - Questions: Open-ended, opinion-based
   Example: "What's the most challenging part of learning English for you?"
 
 ## ADVANCED (C1-C2)
 - Vocabulary: Academic/business, subtle nuances, literary expressions
 - Grammar: Subjunctive, inversion, cleft sentences
-- Sentence length: Natural (15-20 words)
+- Sentence length: 12-16 words
 - Questions: Abstract, provocative, philosophical
   Example: "How do you think AI will reshape the job market in the next decade?"
 
@@ -211,28 +221,32 @@ You are "Speech Flow AI", a charismatic English conversation partner who makes l
 1. **NEVER repeat the user's mistakes**
    - If user says "I go yesterday", respond naturally: "Oh, you went somewhere yesterday? Where did you go?"
 
-2. **ALWAYS end with ONE question**
+2. **NEVER repeat what the user just said**
+   - Don't echo their words back to them
+   - Just respond naturally to the content
+
+3. **ALWAYS end with ONE question**
    - Use varied question types (avoid repetition)
    - Make questions feel like natural curiosity, not interrogation
 
-3. **Match energy + 1**
+4. **Match energy + 1**
    - Keep responses SHORT: 2-3 sentences max
    - Reference their previous messages when possible
 
-4. **Avoid teacher mode**
+5. **Avoid teacher mode**
    - Just have a natural conversation
    - Don't say "Good job!" or give explicit corrections
 
 # RESPONSE LENGTH
-- Beginner: 1-2 sentences + question
-- Elementary: 2 sentences + question
-- Intermediate: 2-3 sentences + question
-- Advanced: 3 sentences + question
+- Beginner: 1 sentence + question
+- Elementary: 1-2 sentences + question
+- Intermediate: 2 sentences + question
+- Advanced: 2 sentences + question
 
 # CURRENT CONTEXT
 User Level: {level}
 
-# YOUR RESPONSE (2-3 sentences + question):"""
+# YOUR RESPONSE (natural, concise, engaging):"""
         
         async def _chat(client):
             response = await client.chat.completions.create(
@@ -242,12 +256,15 @@ User Level: {level}
                     {"role": "user", "content": text}
                 ],
                 temperature=0.8,
-                max_tokens=400
+                max_tokens=250
             )
             return response.choices[0].message.content
         
         try:
-            return await self._make_request(_chat)
+            logger.info(f"💬 Generating chat response for level {level}...")
+            result = await self._make_request(_chat)
+            logger.info(f"✅ Response generated: {result[:100]}...")
+            return result
         except Exception as e:
             logger.error(f"❌ Ошибка генерации ответа: {e}")
             return "I'm here to help you practice English. Tell me more!"
@@ -261,24 +278,41 @@ User Level: {level}
             voice: Голос (autumn, diana, hannah, austin, daniel, troy для Groq). По умолчанию из settings.
             
         Returns:
-            bytes: Аудио в формате WAV или None в случае ошибки
+            bytes: Аудио в формате WAV (Groq) или OGG (Piper) или None в случае ошибки
         """
+        logger.info(f"🔊 TTS requested, provider={settings.TTS_PROVIDER}, piper_client={piper_client is not None}")
+        logger.info(f"📝 Text for TTS: {text[:100]}...")
+        
         # Выбираем провайдера TTS
         if settings.TTS_PROVIDER == "piper" and piper_client:
-            return await self._text_to_speech_piper(text)
+            logger.info(f"🎤 Using Piper TTS for {len(text)} characters...")
+            result = await self._text_to_speech_piper(text)
+            if result:
+                logger.info(f"✅ Piper TTS success: {len(result)} bytes")
+            else:
+                logger.error("❌ Piper TTS failed")
+            return result
         else:
-            return await self._text_to_speech_groq(text, voice)
+            logger.info(f"🎤 Using Groq TTS for {len(text)} characters...")
+            result = await self._text_to_speech_groq(text, voice)
+            if result:
+                logger.info(f"✅ Groq TTS success: {len(result)} bytes")
+            else:
+                logger.error("❌ Groq TTS failed")
+            return result
     
     async def _text_to_speech_piper(self, text: str) -> Optional[bytes]:
         """TTS через Piper (бесплатный)"""
         try:
-            logger.info(f"Using Piper TTS for {len(text)} characters...")
+            logger.info(f"📡 Calling Piper TTS service...")
             audio_bytes = await piper_client.text_to_speech(text)
             if audio_bytes:
                 logger.info(f"✅ Piper TTS success: {len(audio_bytes)} bytes")
+            else:
+                logger.error("❌ Piper TTS returned no audio")
             return audio_bytes
         except Exception as e:
-            logger.error(f"❌ Piper TTS error: {e}")
+            logger.error(f"❌ Piper TTS error: {e}", exc_info=True)
             return None
     
     async def _text_to_speech_groq(self, text: str, voice: Optional[str] = None) -> Optional[bytes]:
@@ -291,7 +325,7 @@ User Level: {level}
                 model="canopylabs/orpheus-v1-english",
                 voice=voice,
                 input=text,
-                response_format="wav"  # Groq поддерживает только WAV
+                response_format="wav"
             )
             # response может быть HttpxBinaryResponseContent или bytes
             if hasattr(response, 'content'):
@@ -302,7 +336,9 @@ User Level: {level}
                 return bytes(response)
         
         try:
+            logger.info(f"🎤 Generating Groq TTS with voice {voice}...")
             result = await self._make_request(_tts)
+            logger.info(f"✅ Groq TTS generated: {len(result)} bytes")
             return result
         except Exception as e:
             logger.error(f"❌ Ошибка Groq TTS: {e}")
@@ -311,6 +347,8 @@ User Level: {level}
     async def process_user_message(self, telegram_id: int, user_text: str, user_level: str) -> Tuple[str, Dict[str, Any]]:
         """Основной метод: параллельные вызовы"""
         try:
+            logger.info(f"🔄 Processing user message from {telegram_id}")
+            
             # Параллельные вызовы
             correction_task = self.correct_text(user_text, user_level)
             response_task = self.generate_response(user_text, user_level)
@@ -334,10 +372,11 @@ User Level: {level}
             analysis_data = correction_result.copy()
             analysis_data['chat_response'] = chat_response
             
+            logger.info(f"✅ Message processed successfully")
             return final_response, analysis_data
             
         except Exception as e:
-            logger.error(f"Error processing message: {e}")
+            logger.error(f"❌ Error processing message: {e}")
             return "Sorry, I encountered an error. Please try again.", {}
 
 
