@@ -93,26 +93,7 @@ cp .env.example .env
 
 # 4. Запустить
 python src/main.py
-Переменные окружения
-env
-# Telegram
-TELEGRAM_BOT_TOKEN=your_bot_token
 
-# Groq API (можно несколько ключей через запятую)
-GROQ_API_KEYS=key1,key2,key3
-
-# Supabase
-SUPABASE_URL=your_supabase_url
-SUPABASE_KEY=your_supabase_key
-
-# Настройки бота
-DEFAULT_USER_LEVEL=intermediate
-FREE_MESSAGES_LIMIT=0  # 0 = без лимита
-VOICE_RESPONSE_MODE=mirror  # always/mirror/never
-TTS_VOICE=autumn  # autumn/diana/hannah/austin/daniel/troy
-
-# Admin IDs (через запятую)
-ADMIN_IDS=123456789,987654321
 🎯 Дорожная карта
 Базовый функционал (текст + голос)
 
