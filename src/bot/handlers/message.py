@@ -1,5 +1,4 @@
 import logging
-import re
 from io import BytesIO
 from aiogram import Router, types
 from aiogram.types import Message, BufferedInputFile
@@ -144,58 +143,30 @@ async def handle_message(message: Message):
             await message.answer(analysis_text, parse_mode="Markdown")
             
             # 2. Генерируем голосовой ответ (только диалог)
-            logger.info("🎤 Generating voice response...")
+            logger.info("Generating voice response...")
             chat_response = analysis_data.get('chat_response', response)
-            logger.info(f"💬 Chat response: {chat_response[:200]}...")
-            
-            # Слегка сокращаем для TTS, но сохраняем живость
-            tts_text = chat_response
-            
-            # Если ответ длинный (больше 3 предложений), берём первые 2-3 предложения
-            sentences = re.split(r'(?<=[.!?])\s+', chat_response)
-            if len(sentences) > 3:
-                # Берём первые 2-3 предложения так, чтобы сохранить вопрос
-                tts_text = ' '.join(sentences[:2])
-                # Если в первых двух нет вопроса, добавляем третье
-                if '?' not in tts_text and len(sentences) > 2:
-                    tts_text = ' '.join(sentences[:3])
-                logger.info(f"📏 TTS text slightly trimmed: {len(sentences)} → {len(tts_text.split('.'))} sentences")
-            
-            logger.info(f"🎤 Sending to TTS: {tts_text[:100]}...")
-            voice_bytes = await groq_client.text_to_speech(tts_text)
+            voice_bytes = await groq_client.text_to_speech(chat_response)
             
             if voice_bytes:
-                logger.info(f"✅ Voice generated: {len(voice_bytes)} bytes")
+                logger.info(f"Voice generated successfully: {len(voice_bytes)} bytes")
+                # Отправляем голосом
+                voice_file = BufferedInputFile(voice_bytes, filename="response.wav")
+                await message.answer_voice(voice_file)
+                logger.info("Voice message sent")
                 
-                # Проверяем, что это не пустой файл
-                if len(voice_bytes) < 100:
-                    logger.error(f"❌ Voice too small: {len(voice_bytes)} bytes")
-                    # Отправляем только текст
-                    await message.answer(f"💬 {chat_response}", parse_mode="Markdown")
-                    return
-                
-                # Пробуем отправить как голос
-                try:
-                    voice_file = BufferedInputFile(voice_bytes, filename="response.ogg")
-                    await message.answer_voice(voice_file)
-                    logger.info("✅ Voice message sent successfully")
-                    
-                    # Дублируем полный диалог текстом для удобства
-                    await message.answer(f"💬 {chat_response}", parse_mode="Markdown")
-                except Exception as e:
-                    logger.error(f"❌ Failed to send voice: {e}", exc_info=True)
-                    # Fallback на текст
-                    await message.answer(f"💬 {chat_response}", parse_mode="Markdown")
+                # Дублируем диалог текстом для удобства
+                await message.answer(f"💬 {chat_response}", parse_mode="Markdown")
             else:
-                logger.warning("⚠️ No voice generated, sending text only")
+                # Fallback: только текст если TTS не сработал
+                logger.warning("TTS failed, sending chat response as text")
                 await message.answer(f"💬 {chat_response}", parse_mode="Markdown")
         else:
             # Текстовый режим: весь ответ текстом
-            logger.info("📝 Sending text-only response")
+            logger.info("Sending text-only response")
             await message.answer(response, parse_mode="Markdown")
         
     except Exception as e:
-        logger.error(f"❌ Error handling message: {e}", exc_info=True)
+        logger.error(f"Error handling message: {e}")
         await message.answer(
             "Sorry, I encountered an error processing your message. Please try again.",
             parse_mode="Markdown"
