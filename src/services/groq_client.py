@@ -9,6 +9,8 @@ from src.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Убираем импорт Piper - он не нужен
+
 
 class GroqClient:
     def __init__(self, api_keys: List[str]):
@@ -257,9 +259,8 @@ User Level: {level}
                 model="canopylabs/orpheus-v1-english",
                 voice=voice,
                 input=text,
-                response_format="wav"  # Groq поддерживает только WAV
+                response_format="wav"
             )
-            # response может быть HttpxBinaryResponseContent или bytes
             if hasattr(response, 'content'):
                 return response.content
             elif hasattr(response, 'read'):
@@ -269,7 +270,6 @@ User Level: {level}
         
         try:
             result = await self._make_request(_tts)
-            logger.info(f"✅ Orpheus TTS success: {len(result)} bytes")
             return result
         except Exception as e:
             logger.error(f"❌ Ошибка Orpheus TTS: {e}")
@@ -284,7 +284,7 @@ User Level: {level}
             
             correction_result, chat_response = await asyncio.gather(correction_task, response_task)
             
-            # Формируем финальный ПОЛНЫЙ ответ (для текстового режима)
+            # Формируем финальный ПОЛНЫЙ ответ
             final_response = f"""💬 **Chat Response:**
 {chat_response}
 
@@ -297,7 +297,6 @@ User Level: {level}
             if correction_result.get('vocabulary_items'):
                 final_response += "\n\n📚 *New words added to your vocabulary*"
             
-            # Добавляем chat_response в analysis_data для голосового режима
             analysis_data = correction_result.copy()
             analysis_data['chat_response'] = chat_response
             
@@ -308,5 +307,5 @@ User Level: {level}
             return "Sorry, I encountered an error. Please try again.", {}
 
 
-# ✅ Глобальный экземпляр
+# ✅ Создаем глобальный экземпляр ПОСЛЕ определения класса
 groq_client = GroqClient(settings.groq_api_keys_list)
