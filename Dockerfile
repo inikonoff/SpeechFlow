@@ -19,6 +19,7 @@ USER appuser
 ENV GROQ_API_KEY=""
 ENV PORT=8000
 ENV HOST=0.0.0.0
+ENV PYTHONPATH=/app
 
 # Здоровье контейнера
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
