@@ -12,7 +12,6 @@ from fastapi import FastAPI, Response
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
-from datetime import datetime, timedelta
 from src.config import settings, ADMIN_IDS
 from src.bot.handlers import start, level, menu, message
 from src.bot.middlewares.user_middleware import UserMiddleware
