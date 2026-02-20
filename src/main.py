@@ -12,8 +12,7 @@ from aiogram.client.default import DefaultBotProperties
 from src.config import settings, ADMIN_IDS
 from src.bot.handlers import start, level, menu, message
 from src.bot.middlewares.user_middleware import UserMiddleware
-from src.services.groq_client import groq_client
-from src.services.supabase_db import db
+from src.services import groq_client, db
 
 # Настройка логирования
 logging.basicConfig(
