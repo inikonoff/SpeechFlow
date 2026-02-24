@@ -3,7 +3,7 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 from supabase import create_client, Client
 
-from src.config import settings
+from src.config import settings, ADMIN_IDS
 
 logger = logging.getLogger(__name__)
 
@@ -64,25 +64,21 @@ class SupabaseDB:
                 "free_messages_used": user.get("free_messages_used", 0) + 1
             }
             
-            # Простая логика streak: увеличиваем каждый день при использовании
             last_active = user.get("last_active")
             if last_active:
                 last_date = datetime.fromisoformat(last_active.replace('Z', '+00:00')).date()
                 today = datetime.now(timezone.utc).date()
-                
-                if today > last_date:
-                    if today.day - last_date.day == 1:
-                        update_data["streak_days"] = user.get("streak_days", 0) + 1
-                    else:
-                        update_data["streak_days"] = 1
+                days_diff = (today - last_date).days  # ✅ исправлено: корректный подсчёт разницы дней
+
+                if days_diff == 1:
+                    update_data["streak_days"] = user.get("streak_days", 0) + 1
+                elif days_diff > 1:
+                    update_data["streak_days"] = 1  # streak сброшен — пропустил день
+                # days_diff == 0: тот же день, streak не меняем
             
             update_data["last_active"] = datetime.now(timezone.utc).isoformat()
             
-            response = (self.client
-                       .table("users")
-                       .update(update_data)
-                       .eq("telegram_id", telegram_id)
-                       .execute())
+            self.client.table("users").update(update_data).eq("telegram_id", telegram_id).execute()
             
         except Exception as e:
             logger.error(f"Error incrementing user metrics: {e}")
@@ -143,7 +139,6 @@ class SupabaseDB:
         try:
             user = await self.get_or_create_user(telegram_id)
             
-            # Получаем количество ошибок по категориям
             error_response = (self.client
                             .table("error_logs")
                             .select("category", count="exact")
@@ -155,7 +150,6 @@ class SupabaseDB:
                 for item in error_response.data:
                     error_stats[item["category"]] = item.get("count", 0)
             
-            # Получаем количество слов в словаре
             vocab_response = (self.client
                             .table("vocabulary")
                             .select("id", count="exact")
@@ -174,7 +168,7 @@ class SupabaseDB:
     
     async def is_admin(self, telegram_id: int) -> bool:
         """Проверяем, является ли пользователь админом"""
-        return telegram_id in settings.ADMIN_IDS
+        return telegram_id in ADMIN_IDS  # ✅ исправлено: используем ADMIN_IDS из config, не settings
 
 
 # Глобальный экземпляр
