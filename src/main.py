@@ -5,10 +5,13 @@ import logging
 import asyncio
 import time
 import psutil
+import json
+from datetime import timedelta
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Dict, Any
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Response, Request
+from fastapi.responses import JSONResponse
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
@@ -34,6 +37,8 @@ bot = Bot(
 dp = Dispatcher()
 shutdown_event = asyncio.Event()
 start_time = time.time()
+polling_task = None
+is_shutting_down = False
 request_stats: Dict[str, int] = {
     "total": 0,
     "success": 0,
@@ -47,8 +52,16 @@ request_stats: Dict[str, int] = {
 
 def handle_sigterm(signum, frame):
     """Обработчик сигнала SIGTERM от Render"""
+    global is_shutting_down
+    if is_shutting_down:
+        return
+    
     logger.info("📡 Received SIGTERM signal, initiating graceful shutdown...")
-    asyncio.create_task(trigger_shutdown())
+    is_shutting_down = True
+    
+    # Создаем задачу для асинхронного завершения
+    loop = asyncio.get_running_loop()
+    loop.call_soon_threadsafe(lambda: asyncio.create_task(trigger_shutdown()))
 
 
 async def trigger_shutdown():
@@ -83,17 +96,9 @@ def get_system_stats() -> Dict[str, Any]:
 def check_services_health() -> Dict[str, bool]:
     """Проверка здоровья сервисов"""
     services = {
-        "groq": len(groq_client.clients) > 0,
-        "supabase": True  # Будет проверяться отдельно
+        "groq": len(groq_client.clients) > 0 if hasattr(groq_client, 'clients') else False,
+        "supabase": db is not None
     }
-    
-    # Проверяем Supabase простым запросом
-    try:
-        # Асинхронно не можем вызвать здесь, поэтому просто проверяем наличие клиента
-        services["supabase"] = db is not None
-    except:
-        services["supabase"] = False
-    
     return services
 
 
@@ -104,21 +109,42 @@ def check_services_health() -> Dict[str, bool]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan для FastAPI с улучшенным мониторингом"""
+    global polling_task
+    
     logger.info("🚀 Starting Speech Flow AI Bot...")
     logger.info("=" * 50)
     logger.info(f"📊 Initializing with:")
-    logger.info(f"   • Groq clients: {len(groq_client.clients)}")
+    logger.info(f"   • Groq clients: {len(groq_client.clients) if hasattr(groq_client, 'clients') else 0}")
     logger.info(f"   • Admin IDs: {len(ADMIN_IDS)}")
     logger.info(f"   • Voice mode: {settings.VOICE_RESPONSE_MODE}")
     logger.info(f"   • TTS voice: {settings.TTS_VOICE}")
     logger.info("=" * 50)
     
-    # Регистрируем обработчик SIGTERM
-    signal.signal(signal.SIGTERM, handle_sigterm)
-    logger.info("✅ SIGTERM handler registered")
+    # Создаем временную директорию
+    temp_dir = getattr(settings, 'TEMP_DIR', '/tmp/speech_flow')
+    os.makedirs(temp_dir, exist_ok=True)
+    settings.TEMP_DIR = temp_dir
     
-    # Запускаем бота
-    await startup()
+    # Регистрируем middleware
+    dp.update.middleware(UserMiddleware())
+    
+    # Регистрируем роутеры
+    dp.include_router(start.router)
+    dp.include_router(level.router)
+    dp.include_router(menu.router)
+    dp.include_router(message.router)
+    
+    # Удаляем вебхук
+    await bot.delete_webhook(drop_pending_updates=True)
+    
+    # Запускаем polling
+    polling_task = asyncio.create_task(run_polling_with_auto_restart())
+    
+    # Регистрируем обработчик SIGTERM
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, handle_sigterm, sig, None)
+    logger.info("✅ Signal handlers registered")
     
     yield  # Здесь работает приложение
     
@@ -131,7 +157,7 @@ app = FastAPI(
     lifespan=lifespan,
     title="Speech Flow AI Bot",
     version="1.0.0",
-    docs_url=None,  # Отключаем Swagger в production
+    docs_url=None,
     redoc_url=None
 )
 
@@ -157,39 +183,40 @@ async def root():
 
 
 @app.get("/health")
+@app.head("/health")  # Добавляем поддержку HEAD запросов для Render
 async def health_check():
     """
     Health check endpoint для Render/UptimeRobot
     Возвращает 200 если всё OK, иначе 503
+    Поддерживает GET и HEAD методы
     """
     try:
         # Проверяем базовую доступность
         services = check_services_health()
         system_stats = get_system_stats()
         
-        # Проверяем, что все критические сервисы работают
+        # Проверяем, что polling работает
+        polling_healthy = polling_task is not None and not polling_task.done()
+        
+        # Критические сервисы
         critical_services = ["groq", "supabase"]
         all_critical_ok = all(services.get(svc, False) for svc in critical_services)
         
-        # Проверяем память (если > 90%, считаем нездоровым)
-        memory_ok = True
-        if system_stats.get("memory_rss_mb", 0) > 1024:  # > 1GB
-            memory_ok = False
-        
-        health_status = all_critical_ok and memory_ok
+        # Общий статус
+        health_status = all_critical_ok and polling_healthy
         
         response_data = {
             "status": "healthy" if health_status else "degraded",
             "timestamp": datetime.utcnow().isoformat(),
             "uptime_seconds": int(time.time() - start_time),
             "services": services,
-            "system": system_stats,
+            "polling": polling_healthy,
             "requests": request_stats
         }
         
         status_code = 200 if health_status else 503
         return Response(
-            content=json.dumps(response_data, indent=2),
+            content=json.dumps(response_data),
             media_type="application/json",
             status_code=status_code
         )
@@ -236,7 +263,7 @@ async def status():
                 "is_bot": True
             },
             "config": {
-                "groq_clients": len(groq_client.clients),
+                "groq_clients": len(groq_client.clients) if hasattr(groq_client, 'clients') else 0,
                 "admin_count": len(ADMIN_IDS),
                 "voice_mode": settings.VOICE_RESPONSE_MODE,
                 "tts_voice": settings.TTS_VOICE,
@@ -246,6 +273,7 @@ async def status():
             "system": system_stats,
             "requests": request_stats,
             "active_dialogues": len(document_dialogues) if document_dialogues else 0,
+            "polling_active": polling_task is not None and not polling_task.done(),
             "uptime_seconds": int(time.time() - start_time),
             "uptime_human": str(timedelta(seconds=int(time.time() - start_time))),
             "timestamp": datetime.utcnow().isoformat()
@@ -283,7 +311,7 @@ speech_flow_requests_errors {request_stats['errors']}
 
 # HELP speech_flow_groq_clients Number of Groq API clients
 # TYPE speech_flow_groq_clients gauge
-speech_flow_groq_clients {len(groq_client.clients)}
+speech_flow_groq_clients {len(groq_client.clients) if hasattr(groq_client, 'clients') else 0}
 
 # HELP speech_flow_memory_rss_bytes Memory usage in bytes
 # TYPE speech_flow_memory_rss_bytes gauge
@@ -292,6 +320,10 @@ speech_flow_memory_rss_bytes {system_stats.get('memory_rss', 0)}
 # HELP speech_flow_cpu_percent CPU usage percent
 # TYPE speech_flow_cpu_percent gauge
 speech_flow_cpu_percent {system_stats.get('cpu_percent', 0)}
+
+# HELP speech_flow_polling_active Polling status (1=active, 0=inactive)
+# TYPE speech_flow_polling_active gauge
+speech_flow_polling_active {1 if polling_task is not None and not polling_task.done() else 0}
 """
     return Response(
         content=metrics_text,
@@ -306,7 +338,7 @@ async def health_detailed():
         # Проверяем Groq
         groq_health = False
         try:
-            if groq_client.clients:
+            if hasattr(groq_client, 'clients') and groq_client.clients:
                 # Простой тестовый запрос
                 groq_health = True
         except:
@@ -324,11 +356,15 @@ async def health_detailed():
         # Проверяем файловую систему (временные файлы)
         temp_health = os.access(settings.TEMP_DIR, os.W_OK) if hasattr(settings, 'TEMP_DIR') else True
         
+        # Проверяем polling
+        polling_health = polling_task is not None and not polling_task.done()
+        
         # Проверяем зависимости
         dependencies = {
             "groq": groq_health,
             "supabase": supabase_health,
-            "temp_dir": temp_health
+            "temp_dir": temp_health,
+            "polling": polling_health
         }
         
         all_healthy = all(dependencies.values())
@@ -337,7 +373,8 @@ async def health_detailed():
             "status": "healthy" if all_healthy else "degraded",
             "timestamp": datetime.utcnow().isoformat(),
             "dependencies": dependencies,
-            "system": get_system_stats()
+            "system": get_system_stats(),
+            "is_shutting_down": is_shutting_down
         }
         
     except Exception as e:
@@ -349,58 +386,61 @@ async def health_detailed():
 
 
 # =============================================================================
-# STARTUP/SHUTDOWN
+# ЗАПУСК POLLING С АВТОМАТИЧЕСКИМ ПЕРЕЗАПУСКОМ
 # =============================================================================
 
-async def startup():
-    """Запуск бота"""
-    try:
-        # Регистрируем middleware
-        dp.update.middleware(UserMiddleware())
-        
-        # Регистрируем роутеры
-        dp.include_router(start.router)
-        dp.include_router(level.router)
-        dp.include_router(menu.router)
-        dp.include_router(message.router)
-        
-        # Удаляем вебхук
-        await bot.delete_webhook(drop_pending_updates=True)
-        
-        # Запускаем polling в фоне
-        asyncio.create_task(run_polling())
-        
-        logger.info("✅ Bot started successfully!")
-        
-    except Exception as e:
-        logger.error(f"❌ Startup error: {e}")
-        raise
-
-
-async def run_polling():
-    """Запуск polling с обработкой завершения"""
-    try:
-        await dp.start_polling(bot)
-    except asyncio.CancelledError:
-        logger.info("Polling task cancelled")
-    except Exception as e:
-        logger.error(f"Polling error: {e}")
-        request_stats["errors"] += 1
-    finally:
-        logger.info("Polling stopped")
+async def run_polling_with_auto_restart():
+    """Запуск polling с автоматическим перезапуском при ошибках"""
+    global is_shutting_down
+    
+    while not is_shutting_down:
+        try:
+            logger.info("🚀 Starting polling...")
+            await dp.start_polling(bot)
+            logger.info("✅ Polling completed normally")
+            break  # Выходим если polling завершился нормально
+        except asyncio.CancelledError:
+            logger.info("📡 Polling task cancelled")
+            break
+        except Exception as e:
+            if is_shutting_down:
+                break
+            
+            logger.error(f"❌ Polling error: {e}")
+            request_stats["errors"] += 1
+            
+            # Ждем перед перезапуском
+            logger.info("⏳ Waiting 5 seconds before restarting polling...")
+            await asyncio.sleep(5)
+            logger.info("🔄 Restarting polling...")
+    
+    logger.info("📡 Polling stopped")
 
 
 async def shutdown():
     """Остановка бота"""
+    global polling_task, is_shutting_down
+    
+    is_shutting_down = True
+    
     try:
-        # Даём время на завершение задач
-        logger.info("⏳ Waiting for ongoing tasks to complete (up to 30 seconds)...")
+        # Отменяем polling задачу
+        if polling_task and not polling_task.done():
+            logger.info("⏳ Cancelling polling task...")
+            polling_task.cancel()
+            try:
+                await asyncio.wait_for(polling_task, timeout=10)
+                logger.info("✅ Polling task cancelled")
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                logger.info("⏱️ Polling task cancellation timeout")
         
-        # Ждём сигнала или таймаут
+        # Даём время на завершение задач
+        logger.info("⏳ Waiting for ongoing tasks to complete (up to 25 seconds)...")
         try:
-            await asyncio.wait_for(shutdown_event.wait(), timeout=30)
+            await asyncio.wait_for(shutdown_event.wait(), timeout=25)
+            logger.info("✅ Ongoing tasks completed")
         except asyncio.TimeoutError:
-            logger.info("Shutdown timeout reached, forcing close...")
+            logger.info("⏱️ Shutdown timeout reached, forcing close...")
         
         # Закрываем сессию бота
         await bot.session.close()
@@ -415,7 +455,7 @@ async def shutdown():
 # =============================================================================
 
 @app.middleware("http")
-async def stats_middleware(request, call_next):
+async def stats_middleware(request: Request, call_next):
     """Middleware для подсчета запросов"""
     request_stats["total"] += 1
     try:
@@ -443,19 +483,23 @@ if __name__ == "__main__":
     settings.TEMP_DIR = temp_dir
     
     # Берём порт из переменной окружения
-    port = int(os.environ.get("PORT", 8000))
+    port = int(os.environ.get("PORT", 10000))
     
-    logger.info("=" * 50)
-    logger.info(f"📡 Starting in production mode...")
+    logger.info("=" * 60)
+    logger.info(f"📡 Starting Speech Flow AI Bot in production mode...")
     logger.info(f"📌 PORT: {port}")
     logger.info(f"📁 Temp dir: {temp_dir}")
-    logger.info(f"🔧 UptimeRobot monitoring: http://localhost:{port}/health")
+    logger.info(f"🔧 Health check: http://localhost:{port}/health (supports GET and HEAD)")
     logger.info(f"📊 Metrics: http://localhost:{port}/metrics")
-    logger.info("=" * 50)
+    logger.info(f"📝 Status: http://localhost:{port}/status")
+    logger.info("=" * 60)
     
+    # Запускаем с правильными параметрами для Render
     uvicorn.run(
-        app,
+        "main:app",  # Используем строковый импорт
         host="0.0.0.0",
         port=port,
-        log_level="info"
+        log_level="info",
+        reload=False,  # Отключаем reload в production
+        workers=1  # Один воркер для бота
     )
