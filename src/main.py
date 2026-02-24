@@ -474,17 +474,23 @@ async def stats_middleware(request: Request, call_next):
 # MAIN
 # =============================================================================
 
+# =============================================================================
+# MAIN
+# =============================================================================
+
 if __name__ == "__main__":
     import uvicorn
-    
+    import os
+
     # Создаем временную директорию, если нужно
     temp_dir = getattr(settings, 'TEMP_DIR', '/tmp/speech_flow')
     os.makedirs(temp_dir, exist_ok=True)
     settings.TEMP_DIR = temp_dir
-    
-    # Берём порт из переменной окружения
+
+    # Берём порт из переменной окружения, преобразуем в int (обязательно!)
+    # Если переменная не найдена, используем 10000 для локальной разработки
     port = int(os.environ.get("PORT", 10000))
-    
+
     logger.info("=" * 60)
     logger.info(f"📡 Starting Speech Flow AI Bot in production mode...")
     logger.info(f"📌 PORT: {port}")
@@ -493,13 +499,14 @@ if __name__ == "__main__":
     logger.info(f"📊 Metrics: http://localhost:{port}/metrics")
     logger.info(f"📝 Status: http://localhost:{port}/status")
     logger.info("=" * 60)
-    
+
     # Запускаем с правильными параметрами для Render
+    # ВАЖНО: указываем путь к модулю с точкой: "src.main:app"
     uvicorn.run(
-        "main:app",  # Используем строковый импорт
-        host="0.0.0.0",
-        port=port,
+        "src.main:app",  # <--- ИСПРАВЛЕНО: теперь указываем папку и файл
+        host="0.0.0.0",  # <--- ОБЯЗАТЕЛЬНО: слушаем все интерфейсы
+        port=port,       # <--- Используем порт из переменной окружения
         log_level="info",
-        reload=False,  # Отключаем reload в production
-        workers=1  # Один воркер для бота
+        reload=False,
+        workers=1
     )
