@@ -68,7 +68,6 @@ async def trigger_shutdown():
     """Триггер для graceful shutdown"""
     shutdown_event.set()
 
-
 # ============================================================================
 # МОНИТОРИНГ И HEALTHCHECK
 # ============================================================================
@@ -100,7 +99,6 @@ def check_services_health() -> Dict[str, bool]:
         "supabase": db is not None
     }
     return services
-
 
 # ============================================================================
 # LIFESPAN
@@ -160,7 +158,6 @@ app = FastAPI(
     docs_url=None,
     redoc_url=None
 )
-
 
 # =============================================================================
 # УЛУЧШЕННЫЕ ENDPOINTЫ ДЛЯ МОНИТОРИНГА
@@ -348,8 +345,8 @@ async def health_detailed():
         supabase_health = False
         try:
             # Простая проверка соединения
-            test_user = await db.get_or_create_user(0)
-            supabase_health = test_user is not None
+            result = db.client.table("users").select("id").limit(1).execute()
+            supabase_health = result is not None
         except:
             pass
         
@@ -384,7 +381,6 @@ async def health_detailed():
             "timestamp": datetime.utcnow().isoformat()
         }
 
-
 # =============================================================================
 # ЗАПУСК POLLING С АВТОМАТИЧЕСКИМ ПЕРЕЗАПУСКОМ
 # =============================================================================
@@ -398,7 +394,7 @@ async def run_polling_with_auto_restart():
             logger.info("🚀 Starting polling...")
             await dp.start_polling(bot)
             logger.info("✅ Polling completed normally")
-            break  # Выходим если polling завершился нормально
+            # break  # Выходим если polling завершился нормально
         except asyncio.CancelledError:
             logger.info("📡 Polling task cancelled")
             break
@@ -449,7 +445,6 @@ async def shutdown():
     except Exception as e:
         logger.error(f"❌ Shutdown error: {e}")
 
-
 # =============================================================================
 # MIDDLEWARE ДЛЯ ПОДСЧЕТА СТАТИСТИКИ
 # =============================================================================
@@ -468,11 +463,6 @@ async def stats_middleware(request: Request, call_next):
     except Exception as e:
         request_stats["errors"] += 1
         raise
-
-
-# =============================================================================
-# MAIN
-# =============================================================================
 
 # =============================================================================
 # MAIN
