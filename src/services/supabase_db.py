@@ -48,7 +48,20 @@ class SupabaseDB:
         except Exception as e:
             logger.error(f"Error in get_or_create_user: {e}")
             raise
-    
+
+    async def update_user_voice(self, telegram_id: int, voice: str) -> bool:
+        """Обновляем голос пользователя"""
+        try:
+            response = (self.client
+                       .table("users")
+                       .update({"voice": voice})
+                       .eq("telegram_id", telegram_id)
+                       .execute())
+            return len(response.data) > 0
+        except Exception as e:
+            logger.error(f"Error updating user voice: {e}")
+            return False
+            
     async def update_user_level(self, telegram_id: int, level: str) -> bool:
         try:
             response = (self.client
