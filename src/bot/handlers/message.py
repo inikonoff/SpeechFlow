@@ -1,7 +1,7 @@
 import logging
 import html
 from io import BytesIO
-from aiogram import Router, types
+from aiogram import Router
 from aiogram.types import Message, BufferedInputFile
 from typing import Dict, Any
 
@@ -45,8 +45,7 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
             is_voice_input = True
             await message.bot.send_chat_action(user_id, "typing")
             voice_file = await message.bot.get_file(message.voice.file_id)
-            user_voice = user.get("voice") or settings.TTS_VOICE
-            voice_bytes = await groq_client.text_to_speech(chat_response, voice=user_voice)
+            voice_bytes = await message.bot.download_file(voice_file.file_path)
             
             user_text = await transcribe_voice_with_groq(voice_bytes.read())
             
@@ -73,13 +72,14 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
         action = "record_voice" if should_reply_voice else "typing"
         await message.bot.send_chat_action(user_id, action)
         
+        # Получаем данные от ИИ (строго две переменные)
         chat_response, analysis_data = await groq_client.process_user_message(
             telegram_id=user_id,
             user_text=user_text,
             user_level=user_level
         )
         
-        # === СОХРАНЕНИЕ В БАЗУ ДАННЫХ ===
+        # Сохранение в БД
         if analysis_data.get('vocabulary_items'):
             for item in analysis_data['vocabulary_items']:
                 await db.add_to_vocabulary(user_id, item)
@@ -88,9 +88,9 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
         if error_cat and error_cat.lower() != 'none':
             await db.log_error(user_id, {"category": error_cat, "mistake_text": user_text})
         
-        await db.increment_user_metrics(user_id, tokens_used=0) # Обновляем streak
-        # ================================
+        await db.increment_user_metrics(user_id, tokens_used=0)
 
+        # Форматирование текста (HTML)
         safe_corrected = html.escape(analysis_data.get('corrected_sentence', user_text))
         safe_explanation = html.escape(analysis_data.get('explanation', 'Ошибок не найдено.'))
         
@@ -99,11 +99,19 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
         if analysis_data.get('vocabulary_items'):
             analysis_text += "\n\n📚 <i>New words added to your vocabulary</i>"
         
+        # Защита от пустого ответа
+        if not chat_response:
+            chat_response = "Sorry, I couldn't formulate a response."
+            
         safe_chat_response = html.escape(chat_response)
 
+        # Отправка ответа
         if should_reply_voice:
             await message.answer(analysis_text, parse_mode="HTML")
-            voice_bytes = await groq_client.text_to_speech(chat_response)
+            
+            # Получаем голос юзера из БД (или дефолтный)
+            user_voice = user.get("voice") or settings.TTS_VOICE
+            voice_bytes = await groq_client.text_to_speech(chat_response, voice=user_voice)
             
             if voice_bytes:
                 voice_file = BufferedInputFile(voice_bytes, filename="response.wav")
@@ -112,7 +120,6 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
             else:
                 await message.answer(f"💬 {safe_chat_response}", parse_mode="HTML")
         else:
-            # Если текстом, шлем одним сообщением
             full_text = f"💬 {safe_chat_response}\n\n{analysis_text}"
             await message.answer(full_text, parse_mode="HTML")
         
