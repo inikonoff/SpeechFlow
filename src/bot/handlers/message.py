@@ -45,7 +45,8 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
             is_voice_input = True
             await message.bot.send_chat_action(user_id, "typing")
             voice_file = await message.bot.get_file(message.voice.file_id)
-            voice_bytes = await message.bot.download_file(voice_file.file_path)
+            user_voice = user.get("voice") or settings.TTS_VOICE
+            voice_bytes = await groq_client.text_to_speech(chat_response, voice=user_voice)
             
             user_text = await transcribe_voice_with_groq(voice_bytes.read())
             
