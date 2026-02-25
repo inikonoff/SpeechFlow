@@ -139,3 +139,66 @@ async def change_user_level(callback: CallbackQuery):
         parse_mode="HTML"
     )
     await callback.answer()
+# ... (твой остальной код в menu.py) ...
+
+@router.callback_query(F.data == "my_stats")
+async def cq_show_stats(callback: CallbackQuery):
+    """Обработка inline-кнопки My Stats"""
+    try:
+        stats = await db.get_user_stats(callback.from_user.id)
+        user = stats.get("user", {})
+        
+        level = str(user.get('level', 'Not set')).upper()
+        streak = user.get('streak_days', 0)
+        vocab_count = stats.get('vocabulary_count', 0)
+        
+        stats_text = (
+            f"📊 <b>Your Speech Flow Stats</b>\n\n"
+            f"👤 <b>Profile:</b>\n"
+            f"• Level: <b>{level}</b>\n"
+            f"• Streak: <b>{streak} days</b>\n\n"
+            f"📈 <b>Progress:</b>\n"
+            f"• Words in vocabulary: <b>{vocab_count}</b>\n\n"
+            f"🎯 <b>Error analysis:</b>\n"
+        )
+        
+        error_stats = stats.get("error_stats", {})
+        if error_stats:
+            for category, count in error_stats.items():
+                cat_safe = html.escape(str(category))
+                stats_text += f"• {cat_safe}: <b>{count}</b>\n"
+        else:
+            stats_text += "No errors logged yet. Keep practicing!"
+        
+        # Изменяем текущее сообщение с кнопками на текст статистики
+        await callback.message.edit_text(stats_text, parse_mode="HTML")
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in cq_show_stats: {e}")
+        await callback.answer("Error loading stats.", show_alert=True)
+
+@router.callback_query(F.data == "my_vocabulary")
+async def cq_show_vocab(callback: CallbackQuery):
+    """Обработка inline-кнопки My Vocabulary"""
+    try:
+        vocabulary = await db.get_user_vocabulary(callback.from_user.id, limit=20)
+        
+        if not vocabulary:
+            vocab_text = "📚 <b>Your Vocabulary</b>\n\nYour vocabulary is empty. New words from our conversations will appear here automatically."
+        else:
+            vocab_text = "📚 <b>Your Vocabulary (Last 20)</b>\n\n"
+            for i, item in enumerate(vocabulary, 1):
+                word = html.escape(item.get("word_or_phrase", ""))
+                translation = html.escape(item.get("translation", ""))
+                context = html.escape(item.get("context_sentence", ""))
+                
+                vocab_text += f"{i}. <b>{word}</b> - {translation}\n"
+                if context:
+                    vocab_text += f"   <i>\"{context[:50]}...\"</i>\n"
+                vocab_text += "\n"
+        
+        await callback.message.edit_text(vocab_text, parse_mode="HTML")
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in cq_show_vocab: {e}")
+        await callback.answer("Error loading vocabulary.", show_alert=True)
