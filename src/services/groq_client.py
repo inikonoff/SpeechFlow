@@ -9,15 +9,12 @@ from src.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Убираем импорт Piper - он не нужен
-
 
 class GroqClient:
     def __init__(self, api_keys: List[str]):
         self.clients = []
         self.current_index = 0
         
-        # Инициализируем клиенты для round-robin
         for key in api_keys:
             if key.strip():
                 self.clients.append(
@@ -30,7 +27,6 @@ class GroqClient:
         logger.info(f"✅ Инициализировано {len(self.clients)} Groq клиентов")
     
     def _get_next_client(self) -> Optional[AsyncOpenAI]:
-        """Round-robin выбор следующего клиента"""
         if not self.clients:
             return None
         
@@ -39,37 +35,24 @@ class GroqClient:
         return client
     
     async def _make_request(self, func, *args, **kwargs):
-        """Универсальный метод с retry и балансировкой"""
         if not self.clients:
             raise Exception("Нет доступных Groq клиентов")
         
         errors = []
-        
-        # Пробуем каждый ключ до 2 раз
         for attempt in range(len(self.clients) * 2):
             client = self._get_next_client()
             if not client:
                 break
-            
             try:
                 return await func(client, *args, **kwargs)
             except Exception as e:
                 errors.append(str(e))
                 logger.warning(f"❌ Groq request failed (attempt {attempt + 1}): {e}")
-                await asyncio.sleep(0.5 + random.random())  # Jitter
+                await asyncio.sleep(0.5 + random.random())
         
         raise Exception(f"Все Groq клиенты недоступны: {'; '.join(errors[:3])}")
     
     async def transcribe_audio(self, audio_bytes: bytes) -> Optional[str]:
-        """
-        Транскрибация голоса через Whisper на Groq
-        
-        Args:
-            audio_bytes: Байты аудиофайла (OGG формат)
-            
-        Returns:
-            str: Распознанный текст или None в случае ошибки
-        """
         async def _transcribe(client):
             response = await client.audio.transcriptions.create(
                 model="whisper-large-v3",
@@ -93,36 +76,34 @@ class GroqClient:
             return None
     
     async def correct_text(self, text: str, level: str) -> Dict[str, Any]:
-        """GPT OSS 120B для коррекции с улучшенным промптом"""
-        
         system_prompt = """# ROLE
 You are an elite ESL Professor with 15+ years of experience. Your goal is to analyze the user's input with surgical precision, provide actionable corrections, and explain the underlying logic in a way that accelerates fluency.
 
 # LEVEL-ADAPTIVE PEDAGOGY
 ## BEGINNER (A1-A2)
 - Focus: Basic Tenses (Present/Past/Future Simple), Articles (a/an/the), Subject-Verb Agreement, Word Order
-- Explanation style: 100% Russian, nurturing tone
+- Explanation style: 100% in Russian
 - Vocabulary items: Only high-frequency words (Top 1000)
 
 ## ELEMENTARY (A2-B1)
 - Focus: Present Perfect, Prepositions, Common Phrasal Verbs, Comparatives
-- Explanation style: 60% Russian / 40% English
+- Explanation style: 100% in Russian
 - Vocabulary items: Everyday collocations
 
 ## INTERMEDIATE (B1-B2)
 - Focus: Conditionals, Reported Speech, Collocations, Phrasal Verbs with multiple meanings
-- Explanation style: 30% Russian / 70% English
+- Explanation style: 100% in Russian
 - Vocabulary items: Academic/professional terms
 
 ## ADVANCED (C1-C2)
 - Focus: Subjunctive Mood, Inversion, Nuance, Register, Stylistic choices
-- Explanation style: 100% English, sophisticated metalanguage
+- Explanation style: 100% in Russian
 - Vocabulary items: Rare synonyms, idiomatic expressions
 
 # OUTPUT FORMAT (JSON ONLY)
 {
   "corrected_sentence": "[Full corrected sentence - if perfect, return original]",
-  "explanation": "[Level-appropriate explanation, max 2 sentences, focus on WHY]",
+  "explanation": "[Level-appropriate explanation, max 2 sentences, focus on WHY. MUST be written entirely in Russian]",
   "vocabulary_items": [
     {
       "word_or_phrase": "...",
@@ -136,7 +117,7 @@ You are an elite ESL Professor with 15+ years of experience. Your goal is to ana
         
         async def _correct(client):
             response = await client.chat.completions.create(
-                model="openai/gpt-oss-120b",
+                model="llama3-70b-8192", # Убедись, что модель существует в твоем Groq!
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"LEVEL: {level}\nUSER TEXT: {text}\n\nAnalyze and correct."}
@@ -148,19 +129,20 @@ You are an elite ESL Professor with 15+ years of experience. Your goal is to ana
         
         try:
             result = await self._make_request(_correct)
-            return json.loads(result)
+            import re
+            match = re.search(r'\{.*\}', result, re.DOTALL)
+            clean_json = match.group(0) if match else result
+            return json.loads(clean_json)
         except Exception as e:
             logger.error(f"❌ Ошибка коррекции: {e}")
             return {
                 "corrected_sentence": text,
-                "explanation": "Correction service unavailable.",
+                "explanation": "Сервис проверки временно недоступен.",
                 "vocabulary_items": [],
                 "error_category": "none"
             }
     
     async def generate_response(self, text: str, level: str) -> str:
-        """Llama 4 Scout для диалога с улучшенным промптом"""
-        
         system_prompt = f"""# ROLE
 You are "Speech Flow AI", a charismatic English conversation partner who makes learners WANT to keep talking. You balance being supportive with gently pushing boundaries (i+1 principle).
 
@@ -224,7 +206,7 @@ User Level: {level}
         
         async def _chat(client):
             response = await client.chat.completions.create(
-                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                model="llama3-70b-8192", # Убедись, что эта модель есть!
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": text}
@@ -241,22 +223,12 @@ User Level: {level}
             return "I'm here to help you practice English. Tell me more!"
     
     async def text_to_speech(self, text: str, voice: Optional[str] = None) -> Optional[bytes]:
-        """
-        Генерация голоса через Groq Orpheus TTS
-        
-        Args:
-            text: Текст для озвучивания
-            voice: Голос Orpheus (autumn, diana, hannah, austin, daniel, troy)
-            
-        Returns:
-            bytes: Аудио в формате WAV или None в случае ошибки
-        """
         if voice is None:
             voice = settings.TTS_VOICE
             
         async def _tts(client):
             response = await client.audio.speech.create(
-                model="canopylabs/orpheus-v1-english",
+                model="tts-1", # У Groq нет своего TTS, используй OpenAI если ключи подходят, или заглушку
                 voice=voice,
                 input=text,
                 response_format="wav"
@@ -272,40 +244,23 @@ User Level: {level}
             result = await self._make_request(_tts)
             return result
         except Exception as e:
-            logger.error(f"❌ Ошибка Orpheus TTS: {e}")
+            logger.error(f"❌ Ошибка TTS: {e}")
             return None
     
     async def process_user_message(self, telegram_id: int, user_text: str, user_level: str) -> Tuple[str, Dict[str, Any]]:
-        """Основной метод: параллельные вызовы"""
         try:
-            # Параллельные вызовы
             correction_task = self.correct_text(user_text, user_level)
             response_task = self.generate_response(user_text, user_level)
             
             correction_result, chat_response = await asyncio.gather(correction_task, response_task)
             
-            # Формируем финальный ПОЛНЫЙ ответ
-            final_response = f"""💬 **Chat Response:**
-{chat_response}
-
-🔧 **Correction & Analysis:**
-{correction_result.get('corrected_sentence', user_text)}
-
-💡 **Why:**
-{correction_result.get('explanation', 'No corrections needed.')}"""
-            
-            if correction_result.get('vocabulary_items'):
-                final_response += "\n\n📚 *New words added to your vocabulary*"
-            
             analysis_data = correction_result.copy()
             analysis_data['chat_response'] = chat_response
             
-            return final_response, analysis_data
+            return chat_response, analysis_data
             
         except Exception as e:
             logger.error(f"Error processing message: {e}")
             return "Sorry, I encountered an error. Please try again.", {}
 
-
-# ✅ Создаем глобальный экземпляр ПОСЛЕ определения класса
 groq_client = GroqClient(settings.groq_api_keys_list)
