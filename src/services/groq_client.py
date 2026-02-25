@@ -117,7 +117,7 @@ You are an elite ESL Professor with 15+ years of experience. Your goal is to ana
         
         async def _correct(client):
             response = await client.chat.completions.create(
-                model="llama3-70b-8192", # Убедись, что модель существует в твоем Groq!
+                model="openai/gpt-oss-120b",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"LEVEL: {level}\nUSER TEXT: {text}\n\nAnalyze and correct."}
@@ -206,7 +206,7 @@ User Level: {level}
         
         async def _chat(client):
             response = await client.chat.completions.create(
-                model="llama3-70b-8192", # Убедись, что эта модель есть!
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": text}
@@ -228,7 +228,7 @@ User Level: {level}
             
         async def _tts(client):
             response = await client.audio.speech.create(
-                model="tts-1", # У Groq нет своего TTS, используй OpenAI если ключи подходят, или заглушку
+                model="canopylabs/orpheus-v1-english",
                 voice=voice,
                 input=text,
                 response_format="wav"
