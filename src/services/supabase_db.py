@@ -147,7 +147,6 @@ class SupabaseDB:
         try:
             user = await self.get_or_create_user(telegram_id)
             
-            # Правильный подсчет ошибок на стороне Python
             error_response = (self.client
                             .table("error_logs")
                             .select("category")
@@ -177,5 +176,47 @@ class SupabaseDB:
     
     async def is_admin(self, telegram_id: int) -> bool:
         return telegram_id in ADMIN_IDS
+
+    # ─── История диалога ───────────────────────────────────────────────────
+
+    async def save_message(self, user_id: int, role: str, content: str) -> bool:
+        """Сохраняет одно сообщение в историю диалога"""
+        try:
+            entry = {
+                "user_id": user_id,
+                "role": role,
+                "content": content,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            response = self.client.table("messages").insert(entry).execute()
+            return len(response.data) > 0
+        except Exception as e:
+            logger.error(f"Error saving message: {e}")
+            return False
+
+    async def get_history(self, user_id: int, limit: int = 5) -> List[Dict[str, str]]:
+        """
+        Возвращает последние N сообщений в хронологическом порядке
+        в формате [{"role": "user"/"assistant", "content": "..."}]
+        """
+        try:
+            response = (self.client
+                       .table("messages")
+                       .select("role, content")
+                       .eq("user_id", user_id)
+                       .order("created_at", desc=True)
+                       .limit(limit)
+                       .execute())
+            
+            if not response.data:
+                return []
+            
+            # Переворачиваем в хронологический порядок
+            messages = list(reversed(response.data))
+            return [{"role": m["role"], "content": m["content"]} for m in messages]
+        except Exception as e:
+            logger.error(f"Error getting history: {e}")
+            return []
+
 
 db = SupabaseDB()
