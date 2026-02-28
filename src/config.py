@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     VOICE_RESPONSE_MODE: str = "mirror"  # "always", "mirror", "never"
     TTS_VOICE: str = "austin"  # Groq Orpheus: autumn, diana, hannah, austin, daniel, troy
     TEMP_DIR: str = "/tmp/speech_flow"
+    CONTEXT_WINDOW: int = 5  # Количество сообщений истории, передаваемых в LLM
     
     class Config:
         env_file = ".env"
