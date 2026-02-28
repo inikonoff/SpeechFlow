@@ -142,7 +142,11 @@ You are an elite ESL Professor with 15+ years of experience. Your goal is to ana
                 "error_category": "none"
             }
     
-    async def generate_response(self, text: str, level: str) -> str:
+    async def generate_response(self, text: str, level: str, history: Optional[List[Dict[str, str]]] = None) -> str:
+        """
+        Генерирует ответ собеседника.
+        history — список {"role": "user"/"assistant", "content": "..."} в хронологическом порядке.
+        """
         system_prompt = f"""# ROLE
 You are "Speech Flow AI", a charismatic English conversation partner who makes learners WANT to keep talking. You balance being supportive with gently pushing boundaries (i+1 principle).
 
@@ -182,17 +186,12 @@ You are "Speech Flow AI", a charismatic English conversation partner who makes l
    - If user says "I go yesterday", respond naturally: "Oh, you went somewhere yesterday? Where did you go?"
 
 2. **THE QUESTION CORE**
-
 Usually end with ONE focused question.
-
 Exception: For Intermediate (B1) and higher, you can use "Rapid-Fire" questions (2-3 short, related questions) to drive the conversation if you find a strong "hook."
 
 3. **ELASTIC RESPONSE STRUCTURE**
-
 Skip the Fluff: You don't always need 2-3 sentences of commentary.
-
 If the user provides a "hook," jump straight to the reaction or the next question.
-
 A response can consist entirely of 1-3 questions if it feels like a natural, curious reaction.
 
 4. **Avoid teacher mode**
@@ -223,17 +222,18 @@ Natural Curiosity: Questions should feel like you're actually interested in the 
 - Advanced: 3 sentences + question
 
 # CURRENT CONTEXT
-User Level: {level}
+User Level: {level}"""
 
-# YOUR RESPONSE (2-3 sentences + question):"""
-        
+        # Собираем messages: system + история + новое сообщение
+        messages = [{"role": "system", "content": system_prompt}]
+        if history:
+            messages.extend(history)
+        messages.append({"role": "user", "content": text})
+
         async def _chat(client):
             response = await client.chat.completions.create(
                 model="meta-llama/llama-4-scout-17b-16e-instruct",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": text}
-                ],
+                messages=messages,
                 temperature=0.8,
                 max_tokens=400
             )
@@ -244,6 +244,29 @@ User Level: {level}
         except Exception as e:
             logger.error(f"❌ Ошибка генерации ответа: {e}")
             return "I'm here to help you practice English. Tell me more!"
+
+    async def translate_text(self, text: str) -> str:
+        """Переводит текст с английского на русский"""
+        async def _translate(client):
+            response = await client.chat.completions.create(
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a translator. Translate the given English text to Russian. Return only the translation, no comments or explanations."
+                    },
+                    {"role": "user", "content": text}
+                ],
+                temperature=0.0,
+                max_tokens=400
+            )
+            return response.choices[0].message.content
+        
+        try:
+            return await self._make_request(_translate)
+        except Exception as e:
+            logger.error(f"❌ Ошибка перевода: {e}")
+            return "Translation unavailable."
     
     async def text_to_speech(self, text: str, voice: Optional[str] = None) -> Optional[bytes]:
         if voice is None:
@@ -270,10 +293,10 @@ User Level: {level}
             logger.error(f"❌ Ошибка TTS: {e}")
             return None
     
-    async def process_user_message(self, telegram_id: int, user_text: str, user_level: str) -> Tuple[str, Dict[str, Any]]:
+    async def process_user_message(self, telegram_id: int, user_text: str, user_level: str, history: Optional[List[Dict[str, str]]] = None) -> Tuple[str, Dict[str, Any]]:
         try:
             correction_task = self.correct_text(user_text, user_level)
-            response_task = self.generate_response(user_text, user_level)
+            response_task = self.generate_response(user_text, user_level, history=history)
             
             correction_result, chat_response = await asyncio.gather(correction_task, response_task)
             
@@ -285,5 +308,14 @@ User Level: {level}
         except Exception as e:
             logger.error(f"Error processing message: {e}")
             return "Sorry, I encountered an error. Please try again.", {}
+
+    async def process_flow_message(self, user_text: str, user_level: str, history: Optional[List[Dict[str, str]]] = None) -> str:
+        """Flow Mode: только диалог, без коррекции"""
+        try:
+            return await self.generate_response(user_text, user_level, history=history)
+        except Exception as e:
+            logger.error(f"Error processing flow message: {e}")
+            return "Tell me more!"
+
 
 groq_client = GroqClient(settings.groq_api_keys_list)
