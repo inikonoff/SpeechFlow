@@ -3,7 +3,7 @@ from aiogram import Router, types
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from src.bot.keyboards import get_level_keyboard
+from src.bot.keyboards import get_level_keyboard, get_flow_start_keyboard
 from src.services.supabase_db import db
 
 router = Router()
@@ -19,8 +19,14 @@ async def cmd_start(message: Message):
             telegram_id=message.from_user.id,
             username=message.from_user.username
         )
-        
-        # Приветственное сообщение
+
+        # Показываем Flow-кнопку сразу — она должна быть всегда
+        await message.answer(
+            ".",
+            reply_markup=get_flow_start_keyboard()
+        )
+
+        # Приветственное сообщение с выбором уровня
         welcome_text = """👋 Welcome to *Speech Flow AI*!
 
 I'm your AI English tutor focused on *conversational fluency*. 
@@ -32,7 +38,7 @@ To get started, please select your English level:"""
             parse_mode="Markdown",
             reply_markup=get_level_keyboard()
         )
-        
+
     except Exception as e:
         logger.error(f"Error in /start: {e}")
         await message.answer("An error occurred. Please try again.")
