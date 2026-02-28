@@ -1,5 +1,5 @@
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
 
 def get_level_keyboard() -> InlineKeyboardMarkup:
@@ -56,3 +56,39 @@ def get_vocabulary_actions_keyboard() -> InlineKeyboardMarkup:
     )
     
     return builder.as_markup()
+
+
+# ─── Translate / Original ──────────────────────────────────────────────────
+
+def get_translate_keyboard(message_id: int) -> InlineKeyboardMarkup:
+    """Кнопка перевода под ответом бота"""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🌐 Translate", callback_data=f"translate_{message_id}")
+    )
+    return builder.as_markup()
+
+
+def get_original_keyboard(message_id: int) -> InlineKeyboardMarkup:
+    """Кнопка возврата к оригиналу"""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🔤 Original", callback_data=f"original_{message_id}")
+    )
+    return builder.as_markup()
+
+
+# ─── Flow Mode ─────────────────────────────────────────────────────────────
+
+def get_flow_start_keyboard() -> ReplyKeyboardMarkup:
+    """Reply-кнопка для активации Flow Mode (всегда видна)"""
+    builder = ReplyKeyboardBuilder()
+    builder.row(KeyboardButton(text="▶ Flow"))
+    return builder.as_markup(resize_keyboard=True, persistent=True)
+
+
+def get_flow_stop_keyboard() -> ReplyKeyboardMarkup:
+    """Reply-кнопка для выхода из Flow Mode"""
+    builder = ReplyKeyboardBuilder()
+    builder.row(KeyboardButton(text="⏹ Stop Flow"))
+    return builder.as_markup(resize_keyboard=True, persistent=True)
