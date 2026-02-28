@@ -15,7 +15,8 @@ from fastapi.responses import JSONResponse
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
-from aiogram.types import BotCommand  # <--- ДОБАВЛЕН ИМПОРТ ДЛЯ МЕНЮ
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import BotCommand
 
 from src.config import settings, ADMIN_IDS
 from src.bot.handlers import start, level, menu, message
@@ -36,11 +37,11 @@ bot = Bot(
     token=settings.TELEGRAM_BOT_TOKEN,
     default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN)
 )
-dp = Dispatcher()
+dp = Dispatcher(storage=MemoryStorage())  # FSM storage для Flow Mode
 shutdown_event = asyncio.Event()
 start_time = time.time()
 polling_task = None
-keep_alive_task = None  # <--- Переменная для задачи пинга БД
+keep_alive_task = None
 is_shutting_down = False
 request_stats: Dict[str, int] = {
     "total": 0,
@@ -49,13 +50,14 @@ request_stats: Dict[str, int] = {
 }
 
 # ============================================================================
-# НОВЫЕ ФУНКЦИИ: МЕНЮ И АНТИ-СОН БД
+# МЕНЮ И АНТИ-СОН БД
 # ============================================================================
 
 async def setup_bot_commands(bot: Bot):
     """Установка системного меню слева от поля ввода"""
     bot_commands = [
         BotCommand(command="/start", description="Restart / Change Level"),
+        BotCommand(command="/flow", description="Toggle Flow Mode"),
         BotCommand(command="/voice", description="Change AI Voice"),
         BotCommand(command="/stats", description="My Stats"),
         BotCommand(command="/vocabulary", description="My Vocabulary"),
@@ -68,7 +70,7 @@ async def db_keep_alive():
     """Фоновая задача: пинг базы данных каждые 12 часов (Анти-сон)"""
     while True:
         try:
-            await asyncio.sleep(43200) # 12 часов
+            await asyncio.sleep(43200)  # 12 часов
             await db.ping()
         except asyncio.CancelledError:
             break
@@ -80,19 +82,15 @@ async def db_keep_alive():
 # ============================================================================
 
 def handle_sigterm(signum, frame):
-    """Обработчик сигнала SIGTERM от Render"""
     global is_shutting_down
     if is_shutting_down:
         return
-    
     logger.info("📡 Received SIGTERM signal, initiating graceful shutdown...")
     is_shutting_down = True
-    
     loop = asyncio.get_running_loop()
     loop.call_soon_threadsafe(lambda: asyncio.create_task(trigger_shutdown()))
 
 async def trigger_shutdown():
-    """Триггер для graceful shutdown"""
     shutdown_event.set()
 
 # ============================================================================
@@ -130,42 +128,39 @@ def check_services_health() -> Dict[str, bool]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global polling_task, keep_alive_task
-    
+
     logger.info("🚀 Starting Speech Flow AI Bot...")
     logger.info("=" * 50)
-    
+
     temp_dir = getattr(settings, 'TEMP_DIR', '/tmp/speech_flow')
     os.makedirs(temp_dir, exist_ok=True)
     settings.TEMP_DIR = temp_dir
-    
+
     dp.update.middleware(UserMiddleware())
-    
+
     dp.include_router(start.router)
     dp.include_router(level.router)
     dp.include_router(menu.router)
     dp.include_router(message.router)
-    
+
     await bot.delete_webhook(drop_pending_updates=True)
-    
-    # --- НАШИ НОВЫЕ ВЫЗОВЫ ---
+
     await setup_bot_commands(bot)
     keep_alive_task = asyncio.create_task(db_keep_alive())
-    # -------------------------
-    
+
     polling_task = asyncio.create_task(run_polling_with_auto_restart())
-    
+
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, handle_sigterm, sig, None)
     logger.info("✅ Signal handlers registered")
-    
+
     yield
-    
+
     logger.info("🛑 Shutting down Speech Flow AI Bot...")
-    # Отменяем наш пинг при выключении
     if keep_alive_task and not keep_alive_task.done():
         keep_alive_task.cancel()
-    
+
     await shutdown()
 
 app = FastAPI(
@@ -177,7 +172,7 @@ app = FastAPI(
 )
 
 # =============================================================================
-# ENDPOINTЫ ДЛЯ МОНИТОРИНГА
+# ENDPOINTS ДЛЯ МОНИТОРИНГА
 # =============================================================================
 
 @app.get("/")
@@ -200,7 +195,7 @@ async def health_check():
         critical_services = ["groq", "supabase"]
         all_critical_ok = all(services.get(svc, False) for svc in critical_services)
         health_status = all_critical_ok and polling_healthy
-        
+
         response_data = {
             "status": "healthy" if health_status else "degraded",
             "timestamp": datetime.utcnow().isoformat(),
@@ -233,7 +228,6 @@ async def status():
 
 @app.get("/metrics")
 async def metrics():
-    system_stats = get_system_stats()
     metrics_text = f"""# HELP speech_flow_uptime_seconds Uptime in seconds
 # TYPE speech_flow_uptime_seconds gauge
 speech_flow_uptime_seconds {int(time.time() - start_time)}
@@ -261,7 +255,8 @@ async def run_polling_with_auto_restart():
         except asyncio.CancelledError:
             break
         except Exception as e:
-            if is_shutting_down: break
+            if is_shutting_down:
+                break
             logger.error(f"❌ Polling error: {e}")
             request_stats["errors"] += 1
             await asyncio.sleep(5)
@@ -273,12 +268,16 @@ async def shutdown():
     try:
         if polling_task and not polling_task.done():
             polling_task.cancel()
-            try: await asyncio.wait_for(polling_task, timeout=10)
-            except: pass
-        
-        try: await asyncio.wait_for(shutdown_event.wait(), timeout=25)
-        except: pass
-        
+            try:
+                await asyncio.wait_for(polling_task, timeout=10)
+            except:
+                pass
+
+        try:
+            await asyncio.wait_for(shutdown_event.wait(), timeout=25)
+        except:
+            pass
+
         await bot.session.close()
     except Exception as e:
         logger.error(f"❌ Shutdown error: {e}")
@@ -288,8 +287,10 @@ async def stats_middleware(request: Request, call_next):
     request_stats["total"] += 1
     try:
         response = await call_next(request)
-        if response.status_code < 400: request_stats["success"] += 1
-        else: request_stats["errors"] += 1
+        if response.status_code < 400:
+            request_stats["success"] += 1
+        else:
+            request_stats["errors"] += 1
         return response
     except Exception:
         request_stats["errors"] += 1
@@ -301,5 +302,4 @@ if __name__ == "__main__":
     os.makedirs(temp_dir, exist_ok=True)
     settings.TEMP_DIR = temp_dir
     port = int(os.environ.get("PORT", 10000))
-
     uvicorn.run("src.main:app", host="0.0.0.0", port=port, log_level="info", reload=False, workers=1)
