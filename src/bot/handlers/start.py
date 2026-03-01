@@ -1,4 +1,5 @@
 import logging
+import html
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, BufferedInputFile
@@ -106,8 +107,7 @@ async def process_persona_selection(callback: CallbackQuery):
             await callback.message.answer_voice(voice_file)
 
         # Текст с кнопкой Translate
-        from aiogram.utils import html as aiogram_html
-        safe_greeting = aiogram_html.escape(greeting)
+        safe_greeting = html.escape(greeting)
         sent = await callback.message.answer(
             f"💬 {safe_greeting}",
             parse_mode="HTML"
