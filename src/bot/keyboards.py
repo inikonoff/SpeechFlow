@@ -18,9 +18,9 @@ def get_level_keyboard() -> InlineKeyboardMarkup:
 
 
 def get_persona_keyboard() -> InlineKeyboardMarkup:
-    """Выбор собеседника — показывается после выбора уровня и при Switch"""
+    """Выбор собеседника"""
     builder = InlineKeyboardBuilder()
-    personas = get_all_personas()  # {key: display_name}
+    personas = get_all_personas()
     for key, name in personas.items():
         builder.row(InlineKeyboardButton(text=name, callback_data=f"persona_{key}"))
     return builder.as_markup()
@@ -29,14 +29,33 @@ def get_persona_keyboard() -> InlineKeyboardMarkup:
 def get_main_menu_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text="📖 How to use Speech Flow", callback_data="how_to_use"),
+        InlineKeyboardButton(text="📖 How to use", callback_data="how_to_use"),
     )
     builder.row(
         InlineKeyboardButton(text="📊 My Stats", callback_data="my_stats"),
         InlineKeyboardButton(text="📚 My Vocabulary", callback_data="my_vocabulary"),
     )
     builder.row(
-        InlineKeyboardButton(text="⚙️ Change Level", callback_data="change_level"),
+        InlineKeyboardButton(text="⚙️ Settings", callback_data="settings"),
+    )
+    return builder.as_markup()
+
+
+def get_settings_keyboard(notifications_enabled: bool) -> InlineKeyboardMarkup:
+    """Меню настроек"""
+    notif_text = "🔔 Notifications: ON" if notifications_enabled else "🔕 Notifications: OFF"
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text=notif_text, callback_data="toggle_notifications")
+    )
+    builder.row(
+        InlineKeyboardButton(text="📊 Change Level", callback_data="change_level"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="🗣 Change Partner", callback_data="change_persona"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="← Back", callback_data="back_to_menu"),
     )
     return builder.as_markup()
 
@@ -44,6 +63,12 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
 def get_back_to_menu_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="← Back to Menu", callback_data="back_to_menu"))
+    return builder.as_markup()
+
+
+def get_back_to_settings_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="← Back to Settings", callback_data="settings"))
     return builder.as_markup()
 
 
@@ -80,14 +105,12 @@ def get_original_keyboard(message_id: int) -> InlineKeyboardMarkup:
 # ─── Flow Mode ─────────────────────────────────────────────────────────────
 
 def get_flow_start_keyboard() -> ReplyKeyboardMarkup:
-    """Reply-кнопка активации Flow Mode — всегда видна"""
     builder = ReplyKeyboardBuilder()
     builder.row(KeyboardButton(text="▶ Flow"))
     return builder.as_markup(resize_keyboard=True, persistent=True)
 
 
 def get_flow_stop_keyboard() -> ReplyKeyboardMarkup:
-    """Reply-кнопка выхода из Flow Mode"""
     builder = ReplyKeyboardBuilder()
     builder.row(KeyboardButton(text="⏹ Stop Flow"))
     return builder.as_markup(resize_keyboard=True, persistent=True)
