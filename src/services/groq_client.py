@@ -458,6 +458,115 @@ User Level: {level}"""
             logger.error(f"❌ Ошибка схлопывания саммари: {e}")
             return combined  # fallback — возвращаем как есть
 
+    # ─── Словарь: напоминание ──────────────────────────────────────────────
+
+    async def generate_vocab_reminder(self, word: str, translation: str, bot_response: str) -> str:
+        """
+        Добавляет в конец готового ответа бота органичное напоминание о слове.
+        """
+        async def _remind(client):
+            response = await client.chat.completions.create(
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are helping a language learner remember vocabulary. "
+                            "You will receive a conversation response and a word to remind. "
+                            "Append ONE short, natural sentence at the end of the response "
+                            "that reminds the user about the word and invites them to use it. "
+                            "Keep it casual and brief. Don't start a new paragraph — "
+                            "just add the reminder sentence after the existing text, separated by a space. "
+                            "Example: 'By the way — you saved the word *utility* recently. Can you use it in your next message?'"
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": f"RESPONSE: {bot_response}\nWORD: {word} ({translation})"
+                    }
+                ],
+                temperature=0.7,
+                max_tokens=200
+            )
+            return response.choices[0].message.content.strip()
+
+        try:
+            return await self._make_request(_remind)
+        except Exception as e:
+            logger.error(f"❌ Ошибка генерации напоминания о слове: {e}")
+            return bot_response
+
+    # ─── Уведомления ───────────────────────────────────────────────────────
+
+    async def generate_re_engagement_notification(
+        self,
+        persona_key: str,
+        stats: Dict[str, Any]
+    ) -> str:
+        """
+        Генерирует персональное уведомление от лица персонажа.
+        Содержит позитивную динамику из статистики пользователя.
+        """
+        from src.personas import get_persona_prompt
+        persona_prompt = get_persona_prompt(persona_key)
+
+        user = stats.get("user", {})
+        streak = user.get("streak_days", 0)
+        vocab_count = stats.get("vocabulary_count", 0)
+        mastered = stats.get("mastered_count", 0)
+        msgs_this_week = stats.get("msgs_this_week", 0)
+        msgs_prev_week = stats.get("msgs_prev_week", 0)
+        error_week = stats.get("error_stats_week", {})
+        error_prev = stats.get("error_stats_prev_week", {})
+
+        # Считаем динамику ошибок
+        total_errors_week = sum(error_week.values())
+        total_errors_prev = sum(error_prev.values())
+        error_trend = ""
+        if total_errors_prev > 0 and total_errors_week < total_errors_prev:
+            pct = int((1 - total_errors_week / total_errors_prev) * 100)
+            error_trend = f"Grammar errors dropped {pct}% compared to last week."
+
+        activity_trend = ""
+        if msgs_prev_week > 0 and msgs_this_week > msgs_prev_week:
+            activity_trend = f"More active this week than last ({msgs_this_week} vs {msgs_prev_week} messages)."
+
+        stats_summary = "\n".join(filter(None, [
+            f"Streak: {streak} days.",
+            f"Vocabulary: {vocab_count} words saved, {mastered} mastered.",
+            error_trend,
+            activity_trend,
+        ]))
+
+        system = (
+            f"{persona_prompt}\n\n"
+            f"# YOUR TASK\n"
+            f"The user hasn't been here in a while. Send them a short, personal message "
+            f"in your own voice — like a friend checking in, not a system notification.\n"
+            f"Mention one or two genuinely positive things from their progress below. "
+            f"Keep it warm, brief (2-3 sentences max), and end with a natural invitation to come back and talk.\n"
+            f"Don't be pushy. Don't say 'I missed you' if it feels forced.\n\n"
+            f"USER PROGRESS:\n{stats_summary}"
+        )
+
+        async def _notify(client):
+            response = await client.chat.completions.create(
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": "[write the re-engagement message]"}
+                ],
+                temperature=0.85,
+                max_tokens=150
+            )
+            return response.choices[0].message.content.strip()
+
+        try:
+            return await self._make_request(_notify)
+        except Exception as e:
+            logger.error(f"❌ Ошибка генерации уведомления: {e}")
+            return "Hey, it's been a while. Come back and let's talk!"
+
     # ─── Перевод ───────────────────────────────────────────────────────────
 
     async def translate_text(self, text: str) -> str:
