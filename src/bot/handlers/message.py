@@ -385,6 +385,30 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
             for item in analysis_data['vocabulary_items']:
                 await db.add_to_vocabulary(user_id, item)
 
+        # Проверяем использовал ли пользователь напомянутое слово → mastery +1
+        used_word = await db.find_word_in_text(user_id, user_text)
+        if used_word:
+            new_score = await db.increase_mastery(used_word["id"])
+            if new_score >= 5:
+                safe_word = html.escape(used_word["word_or_phrase"])
+                await message.answer(
+                    f"✅ <b>{safe_word}</b> — mastered! Added to your collection.",
+                    parse_mode="HTML"
+                )
+
+        # Каждые 4 сообщения вплетаем напоминание о слове из словаря
+        remind_counter = await db.increment_vocab_remind_counter(user_id)
+        if remind_counter >= 4:
+            await db.reset_vocab_remind_counter(user_id)
+            word_to_remind = await db.get_word_for_reminder(user_id)
+            if word_to_remind:
+                await db.mark_word_reminded(word_to_remind["id"])
+                chat_response = await groq_client.generate_vocab_reminder(
+                    word=word_to_remind["word_or_phrase"],
+                    translation=word_to_remind.get("translation", ""),
+                    bot_response=chat_response
+                )
+
         error_cat = analysis_data.get('error_category')
         if error_cat and error_cat.lower() != 'none':
             await db.log_error(user_id, {"category": error_cat, "mistake_text": user_text})
