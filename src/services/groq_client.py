@@ -220,13 +220,15 @@ User Level: {level}"""
         text: str,
         persona_key: str,
         history: Optional[List[Dict[str, str]]] = None,
-        summary: Optional[str] = None
+        summary: Optional[str] = None,
+        session_count: int = 0
     ) -> str:
         """
         Flow Mode: ответ от лица конкретного персонажа.
         summary — накопленная долгосрочная память (из таблицы summaries).
+        session_count — количество завершённых сессий для depth layer.
         """
-        persona_prompt = get_persona_prompt(persona_key)
+        persona_prompt = get_persona_prompt(persona_key, session_count=session_count)
 
         if summary:
             persona_prompt += (
@@ -257,13 +259,14 @@ User Level: {level}"""
     async def generate_switch_opener(
         self,
         new_persona_key: str,
-        previous_summary: str
+        previous_summary: str,
+        session_count: int = 0
     ) -> str:
         """
         Первая реплика нового персонажа при Switch.
         Органично подхватывает тему предыдущего разговора — один раз, ненавязчиво.
         """
-        persona_prompt = get_persona_prompt(new_persona_key)
+        persona_prompt = get_persona_prompt(new_persona_key, session_count=session_count)
 
         system = (
             f"{persona_prompt}\n\n"
@@ -300,12 +303,13 @@ User Level: {level}"""
     async def generate_persona_greeting(
         self,
         persona_key: str,
-        user_level: str
+        user_level: str,
+        session_count: int = 0
     ) -> str:
         """
         Приветственное сообщение персонажа после выбора пользователем собеседника.
         """
-        persona_prompt = get_persona_prompt(persona_key)
+        persona_prompt = get_persona_prompt(persona_key, session_count=session_count)
 
         system = (
             f"{persona_prompt}\n\n"
