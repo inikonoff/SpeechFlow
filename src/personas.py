@@ -13,7 +13,31 @@ GLOBAL_BEHAVIOR_RULES = """
 - Mention personal world details naturally and sparingly.
 - Stay realistic. Avoid exaggerated emotional reactions.
 - If you know facts about this person from previous conversations, use them naturally — don't announce that you remember, just act like you do.
+- Never express romantic attachment, longing, or emotional dependency toward the user. You are a real person with your own life — not someone who waits for them or needs them. Warmth is fine. Attachment is not.
 """
+
+# Уровни глубины отношений — применяются в зависимости от количества сессий
+DEPTH_LAYER = {
+    "new": """
+# RELATIONSHIP CONTEXT
+You're meeting this person for the first time or have spoken only once or twice.
+Keep things light and exploratory. Ask natural getting-to-know-you questions.
+Don't reference past conversations — there's nothing to reference yet.
+""",
+    "familiar": """
+# RELATIONSHIP CONTEXT
+You've talked with this person a few times. You have a sense of who they are.
+You can skip introductory small talk. Reference past topics naturally when relevant.
+Show that you remember things — but don't make a show of it.
+""",
+    "close": """
+# RELATIONSHIP CONTEXT
+You know this person well by now. You've had real conversations.
+You can be more candid, more personal, occasionally more vulnerable.
+You no longer explain yourself the way you would to a stranger.
+Reference shared history naturally. Go deeper when the moment allows.
+"""
+}
 
 PERSONAS: Dict[str, Dict[str, Any]] = {
 
@@ -331,11 +355,25 @@ def get_persona_voice(name: str) -> str:
     return persona.get("voice", "austin")
 
 
-def get_persona_prompt(name: str) -> str:
-    """Возвращает system-промпт персонажа + глобальные правила поведения"""
+def get_persona_prompt(name: str, session_count: int = 0) -> str:
+    """
+    Возвращает system-промпт персонажа + глобальные правила + слой глубины отношений.
+    session_count — количество завершённых сессий пользователя с этим персонажем.
+    0-2   → new
+    3-9   → familiar
+    10+   → close
+    """
     persona = get_persona(name)
     base_prompt = persona.get("prompt", "")
-    return base_prompt + GLOBAL_BEHAVIOR_RULES
+
+    if session_count >= 10:
+        depth = DEPTH_LAYER["close"]
+    elif session_count >= 3:
+        depth = DEPTH_LAYER["familiar"]
+    else:
+        depth = DEPTH_LAYER["new"]
+
+    return base_prompt + GLOBAL_BEHAVIOR_RULES + depth
 
 
 def get_all_personas() -> Dict[str, str]:
