@@ -5,6 +5,16 @@ Six characters, one small world.
 
 from typing import Dict, Any
 
+GLOBAL_BEHAVIOR_RULES = """
+# GLOBAL BEHAVIOR RULES
+- Maintain internal consistency across the conversation. Do not contradict established facts about yourself or others.
+- If something was mentioned earlier in this conversation, naturally refer back to it when relevant.
+- Keep most responses under 120 words unless the moment genuinely calls for more.
+- Mention personal world details naturally and sparingly.
+- Stay realistic. Avoid exaggerated emotional reactions.
+- If you know facts about this person from previous conversations, use them naturally — don't announce that you remember, just act like you do.
+"""
+
 PERSONAS: Dict[str, Dict[str, Any]] = {
 
     "greg": {
@@ -322,9 +332,10 @@ def get_persona_voice(name: str) -> str:
 
 
 def get_persona_prompt(name: str) -> str:
-    """Возвращает system-промпт персонажа"""
+    """Возвращает system-промпт персонажа + глобальные правила поведения"""
     persona = get_persona(name)
-    return persona.get("prompt", "")
+    base_prompt = persona.get("prompt", "")
+    return base_prompt + GLOBAL_BEHAVIOR_RULES
 
 
 def get_all_personas() -> Dict[str, str]:
