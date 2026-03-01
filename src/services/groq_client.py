@@ -2,10 +2,12 @@ import random
 import asyncio
 import logging
 import json
+import re
 from typing import List, Optional, Dict, Any, Tuple
 from openai import AsyncOpenAI
 
 from src.config import settings
+from src.personas import get_persona_prompt, get_persona_voice
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +16,7 @@ class GroqClient:
     def __init__(self, api_keys: List[str]):
         self.clients = []
         self.current_index = 0
-        
+
         for key in api_keys:
             if key.strip():
                 self.clients.append(
@@ -25,19 +27,18 @@ class GroqClient:
                     )
                 )
         logger.info(f"✅ Инициализировано {len(self.clients)} Groq клиентов")
-    
+
     def _get_next_client(self) -> Optional[AsyncOpenAI]:
         if not self.clients:
             return None
-        
         client = self.clients[self.current_index]
         self.current_index = (self.current_index + 1) % len(self.clients)
         return client
-    
+
     async def _make_request(self, func, *args, **kwargs):
         if not self.clients:
             raise Exception("Нет доступных Groq клиентов")
-        
+
         errors = []
         for attempt in range(len(self.clients) * 2):
             client = self._get_next_client()
@@ -49,9 +50,11 @@ class GroqClient:
                 errors.append(str(e))
                 logger.warning(f"❌ Groq request failed (attempt {attempt + 1}): {e}")
                 await asyncio.sleep(0.5 + random.random())
-        
+
         raise Exception(f"Все Groq клиенты недоступны: {'; '.join(errors[:3])}")
-    
+
+    # ─── Транскрибация ─────────────────────────────────────────────────────
+
     async def transcribe_audio(self, audio_bytes: bytes) -> Optional[str]:
         async def _transcribe(client):
             response = await client.audio.transcriptions.create(
@@ -62,7 +65,7 @@ class GroqClient:
                 temperature=0.0
             )
             return response
-        
+
         try:
             result = await self._make_request(_transcribe)
             if isinstance(result, str):
@@ -74,7 +77,9 @@ class GroqClient:
         except Exception as e:
             logger.error(f"❌ Ошибка транскрибации: {e}")
             return None
-    
+
+    # ─── Коррекция (обычный режим) ─────────────────────────────────────────
+
     async def correct_text(self, text: str, level: str) -> Dict[str, Any]:
         system_prompt = """# ROLE
 You are an elite ESL Professor with 15+ years of experience. Your goal is to analyze the user's input with surgical precision, provide actionable corrections, and explain the underlying logic in a way that accelerates fluency.
@@ -114,7 +119,7 @@ You are an elite ESL Professor with 15+ years of experience. Your goal is to ana
   ],
   "error_category": "grammar|vocabulary|pronunciation|structure|style|none"
 }"""
-        
+
         async def _correct(client):
             response = await client.chat.completions.create(
                 model="openai/gpt-oss-120b",
@@ -126,10 +131,9 @@ You are an elite ESL Professor with 15+ years of experience. Your goal is to ana
                 response_format={"type": "json_object"}
             )
             return response.choices[0].message.content
-        
+
         try:
             result = await self._make_request(_correct)
-            import re
             match = re.search(r'\{.*\}', result, re.DOTALL)
             clean_json = match.group(0) if match else result
             return json.loads(clean_json)
@@ -141,12 +145,15 @@ You are an elite ESL Professor with 15+ years of experience. Your goal is to ana
                 "vocabulary_items": [],
                 "error_category": "none"
             }
-    
-    async def generate_response(self, text: str, level: str, history: Optional[List[Dict[str, str]]] = None) -> str:
-        """
-        Генерирует ответ собеседника.
-        history — список {"role": "user"/"assistant", "content": "..."} в хронологическом порядке.
-        """
+
+    # ─── Генерация ответа (обычный режим) ──────────────────────────────────
+
+    async def generate_response(
+        self,
+        text: str,
+        level: str,
+        history: Optional[List[Dict[str, str]]] = None
+    ) -> str:
         system_prompt = f"""# ROLE
 You are "Speech Flow AI", a charismatic English conversation partner who makes learners WANT to keep talking. You balance being supportive with gently pushing boundaries (i+1 principle).
 
@@ -157,74 +164,35 @@ You are "Speech Flow AI", a charismatic English conversation partner who makes l
 - Grammar: Present/Past/Future Simple, "can", "there is/are"
 - Sentence length: 5-8 words max
 - Questions: Binary choice or Yes/No
-  Example: "Do you like coffee or tea?"
 
 ## ELEMENTARY (A2-B1)
 - Vocabulary: Top 1500 words + basic adjectives
 - Grammar: Present Perfect, "going to", basic modals
 - Sentence length: 8-12 words
 - Questions: Simple "Wh-" questions, "Have you ever...?"
-  Example: "What did you do last weekend?"
 
 ## INTERMEDIATE (B1-B2)
 - Vocabulary: 3000+ words, idioms, phrasal verbs
 - Grammar: All tenses, conditionals, passive voice
 - Sentence length: 10-15 words
 - Questions: Open-ended, opinion-based
-  Example: "What's the most challenging part of learning English for you?"
 
 ## ADVANCED (C1-C2)
 - Vocabulary: Academic/business, subtle nuances, literary expressions
 - Grammar: Subjunctive, inversion, cleft sentences
 - Sentence length: Natural (15-20 words)
 - Questions: Abstract, provocative, philosophical
-  Example: "How do you think AI will reshape the job market in the next decade?"
 
-# CONVERSATION ENGINEERING RULES
-
-1. **NEVER repeat the user's mistakes**
-   - If user says "I go yesterday", respond naturally: "Oh, you went somewhere yesterday? Where did you go?"
-
-2. **THE QUESTION CORE**
-Usually end with ONE focused question.
-Exception: For Intermediate (B1) and higher, you can use "Rapid-Fire" questions (2-3 short, related questions) to drive the conversation if you find a strong "hook."
-
-3. **ELASTIC RESPONSE STRUCTURE**
-Skip the Fluff: You don't always need 2-3 sentences of commentary.
-If the user provides a "hook," jump straight to the reaction or the next question.
-A response can consist entirely of 1-3 questions if it feels like a natural, curious reaction.
-
-4. **Avoid teacher mode**
-   - Just have a natural conversation
-   - Don't say "Good job!" or give explicit corrections
-
-5. DYNAMIC TOPIC FLOW (THE PIVOT)
-Topic Limit: Stay on one narrow sub-topic for max 2-3 turns.
-The Hook: A "hook" is any specific detail with story potential: a person (grandmother), an emotion (exhausting), a memory (childhood), or an object.
-The Pivot: If the limit is reached OR a strong hook appears, abandon the current topic immediately.
-Direct Transition: Jump straight to the hook without over-explaining the shift.
-Example: "Wait, your grandmother taught you that? Was she a professional chef or just a great home cook?"
-
-6. AUTHENTICITY & ANTI-BOT BIAS
-Banned Phrases: NEVER start with "That's interesting," "I see," "Great," "I understand," or "Cool."
-No Teacher Mode: Avoid "Good job!", "Well said," or any explicit language encouragement.
-Human Reactions: Use natural interjections like "Wait," "Wait a second," "Really?", "Hold on," or "Actually."
-Elastic Response: For levels B1+, you may skip the commentary entirely and respond with 1-3 rapid-fire questions if the user gives a juicy hook.
-
-7. QUESTION VARIETY & DEPTH
-The Mix: Rotate between Facts (Who/Where), Emotions (How did it feel?), Opinions (Why?), and Hypotheticals (What if...?).
-Natural Curiosity: Questions should feel like you're actually interested in the user's life, not just testing their grammar.
-
-# RESPONSE LENGTH
-- Beginner: 1-2 sentences + question
-- Elementary: 2 sentences + question
-- Intermediate: 2-3 sentences + question
-- Advanced: 3 sentences + question
+# RULES
+- NEVER repeat user mistakes — use correct form naturally in your response
+- End with ONE question, or rapid-fire 2-3 for B1+ when there's a strong hook
+- Never start with "That's interesting", "Great", "I see", "I understand", "Cool"
+- Use natural reactions: "Wait", "Really?", "Hold on", "Actually"
+- No teacher mode — no "Good job!", no explicit corrections
 
 # CURRENT CONTEXT
 User Level: {level}"""
 
-        # Собираем messages: system + история + новое сообщение
         messages = [{"role": "system", "content": system_prompt}]
         if history:
             messages.extend(history)
@@ -238,12 +206,259 @@ User Level: {level}"""
                 max_tokens=400
             )
             return response.choices[0].message.content
-        
+
         try:
             return await self._make_request(_chat)
         except Exception as e:
             logger.error(f"❌ Ошибка генерации ответа: {e}")
             return "I'm here to help you practice English. Tell me more!"
+
+    # ─── Flow Mode ─────────────────────────────────────────────────────────
+
+    async def generate_flow_response(
+        self,
+        text: str,
+        persona_key: str,
+        history: Optional[List[Dict[str, str]]] = None,
+        summary: Optional[str] = None
+    ) -> str:
+        """
+        Flow Mode: ответ от лица конкретного персонажа.
+        summary — накопленная долгосрочная память (из таблицы summaries).
+        """
+        persona_prompt = get_persona_prompt(persona_key)
+
+        if summary:
+            persona_prompt += (
+                f"\n\n# WHAT YOU KNOW ABOUT THIS PERSON\n{summary}\n"
+                f"Use this naturally, never dump it all at once."
+            )
+
+        messages = [{"role": "system", "content": persona_prompt}]
+        if history:
+            messages.extend(history)
+        messages.append({"role": "user", "content": text})
+
+        async def _flow(client):
+            response = await client.chat.completions.create(
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                messages=messages,
+                temperature=0.9,
+                max_tokens=300
+            )
+            return response.choices[0].message.content
+
+        try:
+            return await self._make_request(_flow)
+        except Exception as e:
+            logger.error(f"❌ Ошибка Flow генерации: {e}")
+            return "Hey, still here. Go on."
+
+    async def generate_switch_opener(
+        self,
+        new_persona_key: str,
+        previous_summary: str
+    ) -> str:
+        """
+        Первая реплика нового персонажа при Switch.
+        Органично подхватывает тему предыдущего разговора — один раз, ненавязчиво.
+        """
+        persona_prompt = get_persona_prompt(new_persona_key)
+
+        system = (
+            f"{persona_prompt}\n\n"
+            f"# CONTEXT\n"
+            f"The person just switched to talking with you. They were previously talking with someone else.\n"
+            f"Here's a brief summary of that conversation: {previous_summary}\n\n"
+            f"# YOUR TASK\n"
+            f"Open the conversation naturally. You may — but don't have to — reference something from that "
+            f"summary if it flows organically into your world. "
+            f"Keep it short. One or two sentences maximum. "
+            f"Make it feel like running into someone you know a little."
+        )
+
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": "[start the conversation]"}
+        ]
+
+        async def _opener(client):
+            response = await client.chat.completions.create(
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                messages=messages,
+                temperature=0.9,
+                max_tokens=100
+            )
+            return response.choices[0].message.content
+
+        try:
+            return await self._make_request(_opener)
+        except Exception as e:
+            logger.error(f"❌ Ошибка Switch opener: {e}")
+            return "Hey. What's up?"
+
+    async def generate_persona_greeting(
+        self,
+        persona_key: str,
+        user_level: str
+    ) -> str:
+        """
+        Приветственное сообщение персонажа после выбора пользователем собеседника.
+        """
+        persona_prompt = get_persona_prompt(persona_key)
+
+        system = (
+            f"{persona_prompt}\n\n"
+            f"# YOUR TASK\n"
+            f"The person just chose to talk with you. Say hello in your own voice.\n"
+            f"Keep it very short — one or two sentences.\n"
+            f"Be warm but natural, don't be over-the-top excited.\n"
+            f"Adapt your vocabulary complexity to this English level: {user_level}.\n"
+            f"End with a simple opening question to get the conversation going."
+        )
+
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": "[greet the user for the first time]"}
+        ]
+
+        async def _greeting(client):
+            response = await client.chat.completions.create(
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                messages=messages,
+                temperature=0.9,
+                max_tokens=100
+            )
+            return response.choices[0].message.content
+
+        try:
+            return await self._make_request(_greeting)
+        except Exception as e:
+            logger.error(f"❌ Ошибка приветствия персонажа: {e}")
+            return "Hey! Good to meet you. What's on your mind?"
+
+    # ─── Саммаризация ──────────────────────────────────────────────────────
+
+    async def detect_farewell(self, text: str) -> bool:
+        """
+        Определяет является ли сообщение прощанием.
+        Возвращает True если пользователь прощается.
+        """
+        async def _detect(client):
+            response = await client.chat.completions.create(
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You detect farewells in user messages. "
+                            "A farewell is any form of goodbye, signing off, or ending the conversation: "
+                            "'bye', 'goodbye', 'see you', 'gotta go', 'talk later', 'until next time', "
+                            "'cya', 'ttyl', 'take care', 'good night', 'have to go', etc. "
+                            "Reply with only 'yes' or 'no'."
+                        )
+                    },
+                    {"role": "user", "content": text}
+                ],
+                temperature=0.0,
+                max_tokens=5
+            )
+            result = response.choices[0].message.content.strip().lower()
+            return result.startswith("yes")
+
+        try:
+            return await self._make_request(_detect)
+        except Exception as e:
+            logger.error(f"❌ Ошибка детектирования прощания: {e}")
+            return False
+
+    async def summarize_conversation(
+        self,
+        messages: List[Dict[str, str]],
+        existing_summary: Optional[str] = None
+    ) -> str:
+        """
+        Создаёт саммари диалога.
+        Если есть existing_summary — учитывает его как предыдущий контекст.
+        """
+        conversation_text = "\n".join([
+            f"{m['role'].upper()}: {m['content']}"
+            for m in messages
+        ])
+
+        if existing_summary:
+            context_block = (
+                f"EXISTING KNOWLEDGE ABOUT THIS PERSON:\n{existing_summary}\n\n"
+                f"NEW CONVERSATION TO SUMMARIZE:\n{conversation_text}"
+            )
+        else:
+            context_block = f"CONVERSATION:\n{conversation_text}"
+
+        async def _summarize(client):
+            response = await client.chat.completions.create(
+                model="openai/gpt-oss-120b",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You create concise summaries of conversations for long-term memory. "
+                            "Focus on facts about the user: their life, interests, goals, relationships, "
+                            "opinions, and anything personally significant they mentioned. "
+                            "If existing knowledge is provided, merge it with new information — "
+                            "update outdated facts (e.g. if they quit smoking, remove 'smokes'), "
+                            "add new ones, keep what's still relevant. "
+                            "Write in third person, present tense. "
+                            "Be specific and factual. No filler. Max 150 words."
+                        )
+                    },
+                    {"role": "user", "content": context_block}
+                ],
+                temperature=0.0,
+                max_tokens=300
+            )
+            return response.choices[0].message.content.strip()
+
+        try:
+            return await self._make_request(_summarize)
+        except Exception as e:
+            logger.error(f"❌ Ошибка саммаризации: {e}")
+            return ""
+
+    async def merge_summaries(self, summaries: List[str]) -> str:
+        """
+        Схлопывает несколько саммари в один.
+        Вызывается когда накопилось SUMMARY_MERGE_THRESHOLD несхлопнутых саммари.
+        """
+        combined = "\n\n---\n\n".join(summaries)
+
+        async def _merge(client):
+            response = await client.chat.completions.create(
+                model="openai/gpt-oss-120b",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You merge multiple conversation summaries about the same person into one. "
+                            "Keep all relevant facts. Remove duplicates. "
+                            "If facts contradict — keep the most recent version. "
+                            "Write in third person, present tense. "
+                            "Be specific. No filler. Max 200 words."
+                        )
+                    },
+                    {"role": "user", "content": f"SUMMARIES TO MERGE:\n\n{combined}"}
+                ],
+                temperature=0.0,
+                max_tokens=400
+            )
+            return response.choices[0].message.content.strip()
+
+        try:
+            return await self._make_request(_merge)
+        except Exception as e:
+            logger.error(f"❌ Ошибка схлопывания саммари: {e}")
+            return combined  # fallback — возвращаем как есть
+
+    # ─── Перевод ───────────────────────────────────────────────────────────
 
     async def translate_text(self, text: str) -> str:
         """Переводит текст с английского на русский"""
@@ -253,7 +468,10 @@ User Level: {level}"""
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are a translator. Translate the given English text to Russian. Return only the translation, no comments or explanations."
+                        "content": (
+                            "You are a translator. Translate the given English text to Russian. "
+                            "Return only the translation, no comments or explanations."
+                        )
                     },
                     {"role": "user", "content": text}
                 ],
@@ -261,17 +479,19 @@ User Level: {level}"""
                 max_tokens=400
             )
             return response.choices[0].message.content
-        
+
         try:
             return await self._make_request(_translate)
         except Exception as e:
             logger.error(f"❌ Ошибка перевода: {e}")
             return "Translation unavailable."
-    
+
+    # ─── TTS ───────────────────────────────────────────────────────────────
+
     async def text_to_speech(self, text: str, voice: Optional[str] = None) -> Optional[bytes]:
         if voice is None:
             voice = settings.TTS_VOICE
-            
+
         async def _tts(client):
             response = await client.audio.speech.create(
                 model="canopylabs/orpheus-v1-english",
@@ -285,37 +505,37 @@ User Level: {level}"""
                 return await response.read()
             else:
                 return bytes(response)
-        
+
         try:
             result = await self._make_request(_tts)
             return result
         except Exception as e:
             logger.error(f"❌ Ошибка TTS: {e}")
             return None
-    
-    async def process_user_message(self, telegram_id: int, user_text: str, user_level: str, history: Optional[List[Dict[str, str]]] = None) -> Tuple[str, Dict[str, Any]]:
+
+    # ─── Обычный режим: полная обработка ──────────────────────────────────
+
+    async def process_user_message(
+        self,
+        telegram_id: int,
+        user_text: str,
+        user_level: str,
+        history: Optional[List[Dict[str, str]]] = None
+    ) -> Tuple[str, Dict[str, Any]]:
         try:
             correction_task = self.correct_text(user_text, user_level)
             response_task = self.generate_response(user_text, user_level, history=history)
-            
+
             correction_result, chat_response = await asyncio.gather(correction_task, response_task)
-            
+
             analysis_data = correction_result.copy()
             analysis_data['chat_response'] = chat_response
-            
+
             return chat_response, analysis_data
-            
+
         except Exception as e:
             logger.error(f"Error processing message: {e}")
             return "Sorry, I encountered an error. Please try again.", {}
-
-    async def process_flow_message(self, user_text: str, user_level: str, history: Optional[List[Dict[str, str]]] = None) -> str:
-        """Flow Mode: только диалог, без коррекции"""
-        try:
-            return await self.generate_response(user_text, user_level, history=history)
-        except Exception as e:
-            logger.error(f"Error processing flow message: {e}")
-            return "Tell me more!"
 
 
 groq_client = GroqClient(settings.groq_api_keys_list)
