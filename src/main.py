@@ -32,12 +32,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+from aiogram.fsm.storage.memory import MemoryStorage
+
 # Глобальные переменные
 bot = Bot(
     token=settings.TELEGRAM_BOT_TOKEN,
     default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN)
 )
-dp = Dispatcher()
+dp = Dispatcher(storage=MemoryStorage())
 shutdown_event = asyncio.Event()
 start_time = time.time()
 polling_task = None
