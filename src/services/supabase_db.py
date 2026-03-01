@@ -1,6 +1,6 @@
 import logging
 from typing import Optional, Dict, Any, List
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from supabase import create_client, Client
 
 from src.config import settings, ADMIN_IDS
@@ -41,6 +41,8 @@ class SupabaseDB:
                 "streak_days": 0,
                 "total_tokens_used": 0,
                 "free_messages_used": 0,
+                "notifications_enabled": True,
+                "vocabulary_remind_counter": 0,
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
 
@@ -53,8 +55,7 @@ class SupabaseDB:
 
     async def update_user_voice(self, telegram_id: int, voice: str) -> bool:
         try:
-            response = (self.client
-                        .table("users")
+            response = (self.client.table("users")
                         .update({"voice": voice})
                         .eq("telegram_id", telegram_id)
                         .execute())
@@ -65,8 +66,7 @@ class SupabaseDB:
 
     async def update_user_level(self, telegram_id: int, level: str) -> bool:
         try:
-            response = (self.client
-                        .table("users")
+            response = (self.client.table("users")
                         .update({"level": level})
                         .eq("telegram_id", telegram_id)
                         .execute())
@@ -77,14 +77,24 @@ class SupabaseDB:
 
     async def update_user_persona(self, telegram_id: int, persona_key: str) -> bool:
         try:
-            response = (self.client
-                        .table("users")
+            response = (self.client.table("users")
                         .update({"persona": persona_key})
                         .eq("telegram_id", telegram_id)
                         .execute())
             return len(response.data) > 0
         except Exception as e:
             logger.error(f"Error updating user persona: {e}")
+            return False
+
+    async def update_notifications(self, telegram_id: int, enabled: bool) -> bool:
+        try:
+            response = (self.client.table("users")
+                        .update({"notifications_enabled": enabled})
+                        .eq("telegram_id", telegram_id)
+                        .execute())
+            return len(response.data) > 0
+        except Exception as e:
+            logger.error(f"Error updating notifications: {e}")
             return False
 
     async def increment_user_metrics(self, telegram_id: int, tokens_used: int = 0) -> None:
@@ -101,7 +111,6 @@ class SupabaseDB:
                 last_date = datetime.fromisoformat(last_active.replace('Z', '+00:00')).date()
                 today = datetime.now(timezone.utc).date()
                 days_diff = (today - last_date).days
-
                 if days_diff == 1:
                     update_data["streak_days"] = user.get("streak_days", 0) + 1
                 elif days_diff > 1:
@@ -112,6 +121,27 @@ class SupabaseDB:
         except Exception as e:
             logger.error(f"Error incrementing metrics: {e}")
 
+    async def increment_vocab_remind_counter(self, telegram_id: int) -> int:
+        """Увеличивает счётчик сообщений для напоминания о словах. Возвращает новое значение."""
+        try:
+            user = await self.get_or_create_user(telegram_id)
+            new_val = user.get("vocabulary_remind_counter", 0) + 1
+            self.client.table("users").update(
+                {"vocabulary_remind_counter": new_val}
+            ).eq("telegram_id", telegram_id).execute()
+            return new_val
+        except Exception as e:
+            logger.error(f"Error incrementing vocab remind counter: {e}")
+            return 0
+
+    async def reset_vocab_remind_counter(self, telegram_id: int) -> None:
+        try:
+            self.client.table("users").update(
+                {"vocabulary_remind_counter": 0}
+            ).eq("telegram_id", telegram_id).execute()
+        except Exception as e:
+            logger.error(f"Error resetting vocab remind counter: {e}")
+
     # ─── Словарь ───────────────────────────────────────────────────────────
 
     async def add_to_vocabulary(self, telegram_id: int, word_data: Dict[str, Any]) -> bool:
@@ -121,7 +151,7 @@ class SupabaseDB:
                 "word_or_phrase": word_data.get("word_or_phrase", ""),
                 "translation": word_data.get("translation", ""),
                 "context_sentence": word_data.get("context_sentence", ""),
-                "mastery_score": word_data.get("mastery_score", 0),
+                "mastery_score": 0,
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
             response = self.client.table("vocabulary").insert(vocab_entry).execute()
@@ -132,17 +162,92 @@ class SupabaseDB:
 
     async def get_user_vocabulary(self, telegram_id: int, limit: int = 50) -> List[Dict[str, Any]]:
         try:
-            response = (self.client
-                        .table("vocabulary")
+            response = (self.client.table("vocabulary")
                         .select("*")
                         .eq("user_id", telegram_id)
                         .order("created_at", desc=True)
                         .limit(limit)
                         .execute())
-            return response.data
+            return response.data or []
         except Exception as e:
             logger.error(f"Error getting vocabulary: {e}")
             return []
+
+    async def get_word_for_reminder(self, telegram_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Возвращает слово для напоминания:
+        приоритет — mastery_score < 5, давно не напоминали (или ни разу).
+        """
+        try:
+            response = (self.client.table("vocabulary")
+                        .select("*")
+                        .eq("user_id", telegram_id)
+                        .lt("mastery_score", 5)
+                        .order("last_reminded_at", desc=False, nullsfirst=True)
+                        .limit(1)
+                        .execute())
+            return response.data[0] if response.data else None
+        except Exception as e:
+            logger.error(f"Error getting word for reminder: {e}")
+            return None
+
+    async def mark_word_reminded(self, word_id: str) -> bool:
+        """Обновляет last_reminded_at для слова"""
+        try:
+            response = (self.client.table("vocabulary")
+                        .update({"last_reminded_at": datetime.now(timezone.utc).isoformat()})
+                        .eq("id", word_id)
+                        .execute())
+            return len(response.data) > 0
+        except Exception as e:
+            logger.error(f"Error marking word reminded: {e}")
+            return False
+
+    async def increase_mastery(self, word_id: str) -> int:
+        """Увеличивает mastery_score на 1. Возвращает новое значение."""
+        try:
+            current = (self.client.table("vocabulary")
+                       .select("mastery_score")
+                       .eq("id", word_id)
+                       .execute())
+            if not current.data:
+                return 0
+            new_score = min(current.data[0]["mastery_score"] + 1, 10)
+            self.client.table("vocabulary").update(
+                {"mastery_score": new_score}
+            ).eq("id", word_id).execute()
+            return new_score
+        except Exception as e:
+            logger.error(f"Error increasing mastery: {e}")
+            return 0
+
+    async def find_word_in_text(self, telegram_id: int, text: str) -> Optional[Dict[str, Any]]:
+        """
+        Проверяет использовал ли пользователь напомянутое слово в тексте.
+        Возвращает запись словаря если нашёл.
+        """
+        try:
+            # Берём слова которые напоминали за последние 10 минут
+            since = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+            response = (self.client.table("vocabulary")
+                        .select("*")
+                        .eq("user_id", telegram_id)
+                        .gte("last_reminded_at", since)
+                        .lt("mastery_score", 5)
+                        .execute())
+
+            if not response.data:
+                return None
+
+            text_lower = text.lower()
+            for word in response.data:
+                phrase = word.get("word_or_phrase", "").lower()
+                if phrase and phrase in text_lower:
+                    return word
+            return None
+        except Exception as e:
+            logger.error(f"Error finding word in text: {e}")
+            return None
 
     # ─── Ошибки ────────────────────────────────────────────────────────────
 
@@ -166,35 +271,117 @@ class SupabaseDB:
         try:
             user = await self.get_or_create_user(telegram_id)
 
-            error_response = (self.client
-                              .table("error_logs")
-                              .select("category")
+            # Ошибки за всё время
+            error_response = (self.client.table("error_logs")
+                              .select("category, created_at")
                               .eq("user_id", telegram_id)
                               .execute())
 
             error_stats = {}
+            error_stats_week = {}
+            error_stats_prev_week = {}
+
+            now = datetime.now(timezone.utc)
+            week_ago = (now - timedelta(days=7)).isoformat()
+            two_weeks_ago = (now - timedelta(days=14)).isoformat()
+
             if error_response.data:
                 for item in error_response.data:
                     cat = item.get("category", "other")
+                    created = item.get("created_at", "")
                     error_stats[cat] = error_stats.get(cat, 0) + 1
 
-            vocab_response = (self.client
-                              .table("vocabulary")
+                    if created >= week_ago:
+                        error_stats_week[cat] = error_stats_week.get(cat, 0) + 1
+                    elif created >= two_weeks_ago:
+                        error_stats_prev_week[cat] = error_stats_prev_week.get(cat, 0) + 1
+
+            # Словарь
+            vocab_response = (self.client.table("vocabulary")
+                              .select("id, mastery_score", count="exact")
+                              .eq("user_id", telegram_id)
+                              .execute())
+
+            mastered_count = sum(
+                1 for v in (vocab_response.data or [])
+                if v.get("mastery_score", 0) >= 5
+            )
+
+            # Сообщения за эту и прошлую неделю (для динамики активности)
+            msgs_this_week = (self.client.table("messages")
                               .select("id", count="exact")
                               .eq("user_id", telegram_id)
+                              .eq("role", "user")
+                              .gte("created_at", week_ago)
+                              .execute())
+
+            msgs_prev_week = (self.client.table("messages")
+                              .select("id", count="exact")
+                              .eq("user_id", telegram_id)
+                              .eq("role", "user")
+                              .gte("created_at", two_weeks_ago)
+                              .lt("created_at", week_ago)
                               .execute())
 
             return {
                 "user": user,
-                "vocabulary_count": vocab_response.count if hasattr(vocab_response, 'count') else 0,
-                "error_stats": error_stats
+                "vocabulary_count": vocab_response.count or 0,
+                "mastered_count": mastered_count,
+                "error_stats": error_stats,
+                "error_stats_week": error_stats_week,
+                "error_stats_prev_week": error_stats_prev_week,
+                "msgs_this_week": msgs_this_week.count or 0,
+                "msgs_prev_week": msgs_prev_week.count or 0,
             }
         except Exception as e:
             logger.error(f"Error getting stats: {e}")
-            return {"user": {}, "vocabulary_count": 0, "error_stats": {}}
+            return {"user": {}, "vocabulary_count": 0, "mastered_count": 0,
+                    "error_stats": {}, "error_stats_week": {}, "error_stats_prev_week": {},
+                    "msgs_this_week": 0, "msgs_prev_week": 0}
 
     async def is_admin(self, telegram_id: int) -> bool:
         return telegram_id in ADMIN_IDS
+
+    # ─── Уведомления ───────────────────────────────────────────────────────
+
+    async def get_users_for_notification(self) -> List[Dict[str, Any]]:
+        """
+        Возвращает пользователей которым нужно отправить уведомление:
+        - notifications_enabled = true
+        - last_active > 48 часов назад
+        - last_notified_at > 48 часов назад (или null)
+        """
+        try:
+            threshold = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+            response = (self.client.table("users")
+                        .select("*")
+                        .eq("notifications_enabled", True)
+                        .lt("last_active", threshold)
+                        .execute())
+
+            if not response.data:
+                return []
+
+            result = []
+            for user in response.data:
+                last_notified = user.get("last_notified_at")
+                if last_notified is None or last_notified < threshold:
+                    result.append(user)
+            return result
+        except Exception as e:
+            logger.error(f"Error getting users for notification: {e}")
+            return []
+
+    async def mark_user_notified(self, telegram_id: int) -> bool:
+        try:
+            response = (self.client.table("users")
+                        .update({"last_notified_at": datetime.now(timezone.utc).isoformat()})
+                        .eq("telegram_id", telegram_id)
+                        .execute())
+            return len(response.data) > 0
+        except Exception as e:
+            logger.error(f"Error marking user notified: {e}")
+            return False
 
     # ─── История диалога ───────────────────────────────────────────────────
 
@@ -214,8 +401,7 @@ class SupabaseDB:
 
     async def get_history(self, user_id: int, limit: int = 5) -> List[Dict[str, str]]:
         try:
-            response = (self.client
-                        .table("messages")
+            response = (self.client.table("messages")
                         .select("role, content")
                         .eq("user_id", user_id)
                         .order("created_at", desc=True)
@@ -225,8 +411,8 @@ class SupabaseDB:
             if not response.data:
                 return []
 
-            messages = list(reversed(response.data))
-            return [{"role": m["role"], "content": m["content"]} for m in messages]
+            return [{"role": m["role"], "content": m["content"]}
+                    for m in reversed(response.data)]
         except Exception as e:
             logger.error(f"Error getting history: {e}")
             return []
@@ -234,7 +420,6 @@ class SupabaseDB:
     # ─── Саммаризация ──────────────────────────────────────────────────────
 
     async def save_summary(self, user_id: int, content: str, is_merged: bool = False) -> bool:
-        """Сохраняет новый саммари диалога"""
         try:
             entry = {
                 "user_id": user_id,
@@ -249,10 +434,8 @@ class SupabaseDB:
             return False
 
     async def get_summaries(self, user_id: int) -> List[Dict[str, Any]]:
-        """Возвращает все саммари пользователя в хронологическом порядке"""
         try:
-            response = (self.client
-                        .table("summaries")
+            response = (self.client.table("summaries")
                         .select("*")
                         .eq("user_id", user_id)
                         .order("created_at", desc=False)
@@ -263,29 +446,19 @@ class SupabaseDB:
             return []
 
     async def get_latest_summary(self, user_id: int) -> Optional[str]:
-        """
-        Возвращает актуальный контекст пользователя для инжекции в промпт.
-        Если есть merged-саммари — берёт его + новые после него.
-        Если нет — берёт все по порядку.
-        """
         try:
             summaries = await self.get_summaries(user_id)
             if not summaries:
                 return None
 
-            # Ищем последний merged — он база
             merged = [s for s in summaries if s.get("is_merged")]
             unmerged = [s for s in summaries if not s.get("is_merged")]
 
             if merged:
-                # Берём последний merged + все unmerged после него
                 last_merged = merged[-1]
-                last_merged_time = last_merged["created_at"]
-                new_after_merge = [
-                    s for s in unmerged
-                    if s["created_at"] > last_merged_time
-                ]
-                parts = [last_merged["content"]] + [s["content"] for s in new_after_merge]
+                new_after = [s for s in unmerged
+                             if s["created_at"] > last_merged["created_at"]]
+                parts = [last_merged["content"]] + [s["content"] for s in new_after]
             else:
                 parts = [s["content"] for s in unmerged]
 
@@ -295,24 +468,20 @@ class SupabaseDB:
             return None
 
     async def count_unmerged_summaries(self, user_id: int) -> int:
-        """Считает количество несхлопнутых саммари"""
         try:
-            response = (self.client
-                        .table("summaries")
+            response = (self.client.table("summaries")
                         .select("id", count="exact")
                         .eq("user_id", user_id)
                         .eq("is_merged", False)
                         .execute())
-            return response.count if hasattr(response, 'count') else 0
+            return response.count or 0
         except Exception as e:
             logger.error(f"Error counting summaries: {e}")
             return 0
 
     async def get_unmerged_summaries(self, user_id: int) -> List[Dict[str, Any]]:
-        """Возвращает все несхлопнутые саммари"""
         try:
-            response = (self.client
-                        .table("summaries")
+            response = (self.client.table("summaries")
                         .select("*")
                         .eq("user_id", user_id)
                         .eq("is_merged", False)
@@ -324,32 +493,26 @@ class SupabaseDB:
             return []
 
     async def mark_summaries_as_merged(self, user_id: int, summary_ids: List[str]) -> bool:
-        """Помечает старые саммари как вошедшие в схлопывание"""
         try:
             for sid in summary_ids:
-                self.client.table("summaries").update({"is_merged": True}).eq("id", sid).execute()
+                self.client.table("summaries").update(
+                    {"is_merged": True}
+                ).eq("id", sid).execute()
             return True
         except Exception as e:
             logger.error(f"Error marking summaries as merged: {e}")
             return False
 
     async def get_messages_for_summary(self, user_id: int, limit: int = 30) -> List[Dict[str, str]]:
-        """
-        Возвращает последние N сообщений для саммаризации.
-        Используется при детектировании прощания.
-        """
         try:
-            response = (self.client
-                        .table("messages")
+            response = (self.client.table("messages")
                         .select("role, content")
                         .eq("user_id", user_id)
                         .order("created_at", desc=True)
                         .limit(limit)
                         .execute())
-
             if not response.data:
                 return []
-
             return list(reversed(response.data))
         except Exception as e:
             logger.error(f"Error getting messages for summary: {e}")
