@@ -142,6 +142,19 @@ class SupabaseDB:
         except Exception as e:
             logger.error(f"Error resetting vocab remind counter: {e}")
 
+    async def increment_session_count(self, telegram_id: int) -> int:
+        """Увеличивает счётчик завершённых сессий. Вызывается при прощании. Возвращает новое значение."""
+        try:
+            user = await self.get_or_create_user(telegram_id)
+            new_val = user.get("session_count", 0) + 1
+            self.client.table("users").update(
+                {"session_count": new_val}
+            ).eq("telegram_id", telegram_id).execute()
+            return new_val
+        except Exception as e:
+            logger.error(f"Error incrementing session count: {e}")
+            return 0
+
     # ─── Словарь ───────────────────────────────────────────────────────────
 
     async def add_to_vocabulary(self, telegram_id: int, word_data: Dict[str, Any]) -> bool:
