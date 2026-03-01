@@ -195,9 +195,15 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
 
         # Новый или Switch — разные приветствия
         if switch_context:
-            greeting = await groq_client.generate_switch_opener(persona_key, switch_context)
+            greeting = await groq_client.generate_switch_opener(
+                persona_key, switch_context,
+                session_count=user.get("session_count", 0)
+            )
         else:
-            greeting = await groq_client.generate_persona_greeting(persona_key, user_level)
+            greeting = await groq_client.generate_persona_greeting(
+                persona_key, user_level,
+                session_count=user.get("session_count", 0)
+            )
 
         await db.save_message(user_id, "assistant", greeting)
 
@@ -291,7 +297,8 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             text=user_text,
             persona_key=persona_key,
             history=history,
-            summary=summary
+            summary=summary,
+            session_count=user.get("session_count", 0)
         )
         await db.save_message(user_id, "assistant", chat_response)
 
@@ -307,9 +314,10 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             extra_keyboard=switch_kb
         )
 
-        # Если прощание — запускаем саммаризацию в фоне
+        # Если прощание — саммаризация в фоне + инкремент сессии
         if is_farewell:
             asyncio.create_task(run_summarization(user_id))
+            asyncio.create_task(db.increment_session_count(user_id))
             logger.info(f"Farewell detected for user {user_id}, summarization scheduled")
 
     except Exception as e:
