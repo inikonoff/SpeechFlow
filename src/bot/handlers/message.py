@@ -289,9 +289,10 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
         farewell_task = asyncio.create_task(groq_client.detect_farewell(user_text))
         history_task = asyncio.create_task(db.get_history(user_id, limit=settings.CONTEXT_WINDOW))
         summary_task = asyncio.create_task(db.get_latest_summary(user_id))
+        errors_task = asyncio.create_task(db.get_top_error_categories(user_id, limit=2))
 
-        history, summary, is_farewell = await asyncio.gather(
-            history_task, summary_task, farewell_task
+        history, summary, is_farewell, top_errors = await asyncio.gather(
+            history_task, summary_task, farewell_task, errors_task
         )
 
         await message.bot.send_chat_action(user_id, "record_voice")
@@ -300,7 +301,8 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             persona_key=persona_key,
             history=history,
             summary=summary,
-            session_count=user.get("session_count", 0)
+            session_count=user.get("session_count", 0),
+            top_errors=top_errors
         )
         await db.save_message(user_id, "assistant", chat_response)
 
