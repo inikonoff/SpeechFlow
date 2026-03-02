@@ -304,15 +304,22 @@ User Level: {level}"""
         self,
         persona_key: str,
         user_level: str,
-        session_count: int = 0
+        session_count: int = 0,
+        summary: Optional[str] = None
     ) -> str:
-        """
-        Приветственное сообщение персонажа после выбора пользователем собеседника.
-        """
         persona_prompt = get_persona_prompt(persona_key, session_count=session_count)
 
+        if summary:
+            memory_block = (
+                f"\n\n# WHAT YOU KNOW ABOUT THIS PERSON\n{summary}\n"
+                f"You've talked before. Open naturally — reference something real "
+                f"from what you know, don't pretend this is the first time."
+            )
+        else:
+            memory_block = ""
+
         system = (
-            f"{persona_prompt}\n\n"
+            f"{persona_prompt}{memory_block}\n\n"
             f"# YOUR TASK\n"
             f"The person just chose to talk with you. Say hello in your own voice.\n"
             f"Keep it very short — one or two sentences.\n"
