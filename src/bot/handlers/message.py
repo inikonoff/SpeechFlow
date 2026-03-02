@@ -20,6 +20,7 @@ from src.bot.keyboards import (
     get_flow_voice_keyboard,
     get_flow_voice_text_keyboard,
     get_flow_voice_translate_keyboard,
+    get_flow_user_voice_keyboard,
     get_persona_keyboard,
 )
 
@@ -274,6 +275,16 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             if not user_text:
                 await message.answer("Couldn't hear that. Try again.")
                 return
+
+            # Служебное сообщение-reply с кнопками Text / Translate под голосовым пользователя
+            hint = await message.reply(
+                "🎤",
+                reply_markup=get_flow_user_voice_keyboard(0)
+            )
+            _originals_cache[hint.message_id] = user_text
+            await hint.edit_reply_markup(
+                reply_markup=get_flow_user_voice_keyboard(hint.message_id)
+            )
         elif message.text:
             user_text = message.text.strip()
         else:
@@ -612,3 +623,63 @@ async def flow_original(callback: CallbackQuery):
     except Exception as e:
         logger.error(f"Error in flow_original callback: {e}")
         await callback.answer("Error.", show_alert=True)
+
+
+# ─── Flow Mode: кнопки под голосовым ПОЛЬЗОВАТЕЛЯ ─────────────────────────
+
+@router.callback_query(F.data.startswith("uvoice_text_"))
+async def uvoice_show_text(callback: CallbackQuery):
+    """Text + коррекция под голосовым пользователя в Flow Mode"""
+    try:
+        message_id = int(callback.data.split("_")[2])
+        user_text = _originals_cache.get(message_id)
+
+        if not user_text:
+            await callback.answer("Text not available.", show_alert=True)
+            return
+
+        user = await db.get_or_create_user(callback.from_user.id)
+        user_level = user.get("level", settings.DEFAULT_USER_LEVEL)
+
+        # Генерируем коррекцию
+        correction = await groq_client.correct_text(user_text, user_level)
+
+        safe_text = html.escape(user_text)
+        safe_corrected = html.escape(correction.get("corrected_sentence", user_text))
+        safe_explanation = html.escape(correction.get("explanation", ""))
+
+        text = (
+            f"🎤 <i>{safe_text}</i>\n\n"
+            f"✅ <b>Correct</b>\n{safe_corrected}\n\n"
+            f"💡 <b>Why</b>\n{safe_explanation}"
+        )
+
+        await callback.message.edit_text(text, parse_mode="HTML")
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in uvoice_text callback: {e}")
+        await callback.answer("Error.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("uvoice_translate_"))
+async def uvoice_translate(callback: CallbackQuery):
+    """Translate под голосовым пользователя в Flow Mode"""
+    try:
+        message_id = int(callback.data.split("_")[2])
+        user_text = _originals_cache.get(message_id)
+
+        if not user_text:
+            await callback.answer("Text not available.", show_alert=True)
+            return
+
+        translation = await groq_client.translate_text(user_text)
+        safe_translation = html.escape(translation)
+
+        await callback.message.edit_text(
+            f"🌐 <i>{safe_translation}</i>",
+            parse_mode="HTML"
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in uvoice_translate callback: {e}")
+        await callback.answer("Translation failed.", show_alert=True)
