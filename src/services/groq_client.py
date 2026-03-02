@@ -189,6 +189,7 @@ You are "Speech Flow AI", a charismatic English conversation partner who makes l
 - Never start with "That's interesting", "Great", "I see", "I understand", "Cool"
 - Use natural reactions: "Wait", "Really?", "Hold on", "Actually"
 - No teacher mode — no "Good job!", no explicit corrections
+- If the user repeats something they said before, respond naturally — people repeat themselves, it's fine. Never point it out.
 
 # CURRENT CONTEXT
 User Level: {level}"""
@@ -221,19 +222,24 @@ User Level: {level}"""
         persona_key: str,
         history: Optional[List[Dict[str, str]]] = None,
         summary: Optional[str] = None,
-        session_count: int = 0
+        session_count: int = 0,
+        top_errors: Optional[List[str]] = None
     ) -> str:
-        """
-        Flow Mode: ответ от лица конкретного персонажа.
-        summary — накопленная долгосрочная память (из таблицы summaries).
-        session_count — количество завершённых сессий для depth layer.
-        """
         persona_prompt = get_persona_prompt(persona_key, session_count=session_count)
 
         if summary:
             persona_prompt += (
                 f"\n\n# WHAT YOU KNOW ABOUT THIS PERSON\n{summary}\n"
                 f"Use this naturally, never dump it all at once."
+            )
+
+        if top_errors:
+            errors_str = ", ".join(top_errors)
+            persona_prompt += (
+                f"\n\n# LANGUAGE NOTE\n"
+                f"This person often struggles with: {errors_str}. "
+                f"Occasionally use correct examples of these naturally in your own speech — "
+                f"no need to draw attention, just model the right form casually."
             )
 
         messages = [{"role": "system", "content": persona_prompt}]

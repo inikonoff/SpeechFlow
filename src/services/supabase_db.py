@@ -264,7 +264,25 @@ class SupabaseDB:
 
     # ─── Ошибки ────────────────────────────────────────────────────────────
 
-    async def log_error(self, telegram_id: int, error_data: Dict[str, Any]) -> bool:
+    async def get_top_error_categories(self, telegram_id: int, limit: int = 2) -> List[str]:
+        """Возвращает топ категорий ошибок пользователя по частоте"""
+        try:
+            response = (self.client.table("error_logs")
+                        .select("category")
+                        .eq("user_id", telegram_id)
+                        .execute())
+            if not response.data:
+                return []
+            counts: Dict[str, int] = {}
+            for row in response.data:
+                cat = row.get("category", "").strip().lower()
+                if cat and cat != "none":
+                    counts[cat] = counts.get(cat, 0) + 1
+            sorted_cats = sorted(counts.items(), key=lambda x: x[1], reverse=True)
+            return [cat for cat, _ in sorted_cats[:limit]]
+        except Exception as e:
+            logger.error(f"Error getting top error categories: {e}")
+            return []
         try:
             error_entry = {
                 "user_id": telegram_id,
