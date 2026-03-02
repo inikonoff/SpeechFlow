@@ -117,6 +117,16 @@ def get_flow_stop_keyboard() -> ReplyKeyboardMarkup:
         KeyboardButton(text="⏹ Stop Flow"),
     )
     return builder.as_markup(resize_keyboard=True, persistent=True)
+
+
+def get_flow_user_voice_keyboard(message_id: int) -> InlineKeyboardMarkup:
+    """Кнопки под служебным сообщением после голосового пользователя в Flow Mode"""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="📝 Text", callback_data=f"uvoice_text_{message_id}"),
+        InlineKeyboardButton(text="🌐 Translate", callback_data=f"uvoice_translate_{message_id}"),
+    )
+    return builder.as_markup()
     return builder.as_markup(resize_keyboard=True, persistent=True)
 
 
