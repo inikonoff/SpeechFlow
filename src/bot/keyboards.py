@@ -112,11 +112,40 @@ def get_flow_start_keyboard() -> ReplyKeyboardMarkup:
 
 def get_flow_stop_keyboard() -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
-    builder.row(KeyboardButton(text="⏹ Stop Flow"))
+    builder.row(
+        KeyboardButton(text="↩ Switch"),
+        KeyboardButton(text="⏹ Stop Flow"),
+    )
+    return builder.as_markup(resize_keyboard=True, persistent=True)
     return builder.as_markup(resize_keyboard=True, persistent=True)
 
 
-def get_flow_active_keyboard(persona_name: str) -> InlineKeyboardMarkup:
+def get_flow_voice_keyboard(message_id: int) -> InlineKeyboardMarkup:
+    """Кнопки под голосовым сообщением в Flow Mode"""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="📝 Text", callback_data=f"flow_text_{message_id}"),
+        InlineKeyboardButton(text="🌐 Translate", callback_data=f"flow_translate_{message_id}"),
+    )
+    return builder.as_markup()
+
+
+def get_flow_voice_text_keyboard(message_id: int) -> InlineKeyboardMarkup:
+    """После нажатия Text — показываем Translate"""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🌐 Translate", callback_data=f"flow_translate_{message_id}"),
+    )
+    return builder.as_markup()
+
+
+def get_flow_voice_translate_keyboard(message_id: int) -> InlineKeyboardMarkup:
+    """После нажатия Translate — показываем Original"""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🔤 Original", callback_data=f"flow_original_{message_id}"),
+    )
+    return builder.as_markup()
     """Inline-кнопка Switch во время активного Flow диалога"""
     builder = InlineKeyboardBuilder()
     builder.row(
