@@ -27,7 +27,7 @@ async def cmd_start(message: Message, state: FSMContext):
         await state.clear()
 
         # Постоянная Reply-кнопка Flow
-        await message.answer(".", reply_markup=get_flow_start_keyboard())
+        await message.answer("​", reply_markup=get_flow_start_keyboard())
 
         await message.answer(
             "👋 Welcome to <b>Speech Flow AI</b>!\n\n"
