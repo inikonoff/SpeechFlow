@@ -11,13 +11,15 @@ from src.config import settings, ADMIN_IDS
 from src.services.supabase_db import db
 from src.services.groq_client import groq_client
 from src.utils.audio import save_voice_file, cleanup_file, read_file_bytes
-from src.personas import get_persona_voice, get_all_personas
+from src.personas import get_persona_voice
 from src.bot.keyboards import (
     get_translate_keyboard,
     get_original_keyboard,
     get_flow_start_keyboard,
     get_flow_stop_keyboard,
-    get_flow_active_keyboard,
+    get_flow_voice_keyboard,
+    get_flow_voice_text_keyboard,
+    get_flow_voice_translate_keyboard,
     get_persona_keyboard,
 )
 
@@ -171,6 +173,28 @@ async def deactivate_flow(message: Message, state: FSMContext):
     )
 
 
+@router.message(F.text == "↩ Switch")
+async def flow_switch_reply(message: Message, state: FSMContext):
+    """Switch через Reply-кнопку"""
+    try:
+        user_id = message.from_user.id
+        history = await db.get_history(user_id, limit=settings.CONTEXT_WINDOW)
+        context_text = " | ".join([
+            f"{m['role']}: {m['content']}" for m in history
+        ]) if history else ""
+
+        await state.update_data(switch_context=context_text)
+        await state.set_state(FlowState.choosing_persona)
+
+        await message.answer(
+            "Who would you like to talk to next?",
+            reply_markup=get_persona_keyboard()
+        )
+    except Exception as e:
+        logger.error(f"Error in flow switch reply: {e}")
+        await message.answer("Something went wrong. Try again.")
+
+
 # ─── Flow Mode: выбор персонажа ────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("persona_"), FlowState.choosing_persona)
@@ -207,48 +231,24 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
 
         await db.save_message(user_id, "assistant", greeting)
 
-        personas = get_all_personas()
-        persona_name = personas.get(persona_key, persona_key.capitalize())
-        switch_kb = get_flow_active_keyboard(persona_name)
+        # Приветствие — голос с кнопками Text / Translate
+        voice_bytes = await groq_client.text_to_speech(greeting, voice=voice)
+        if voice_bytes:
+            voice_file = BufferedInputFile(voice_bytes, filename="greeting.wav")
+            sent = await callback.message.answer_voice(
+                voice_file,
+                reply_markup=get_flow_voice_keyboard(0)  # placeholder id
+            )
+            # Обновляем keyboard с реальным message_id
+            _originals_cache[sent.message_id] = greeting
+            await sent.edit_reply_markup(
+                reply_markup=get_flow_voice_keyboard(sent.message_id)
+            )
 
-        await send_response_with_translate(
-            callback.message,
-            greeting,
-            should_reply_voice=True,
-            voice=voice,
-            extra_keyboard=switch_kb
-        )
         await callback.answer()
 
     except Exception as e:
         logger.error(f"Error in flow persona selection: {e}")
-        await callback.answer("Something went wrong.", show_alert=True)
-
-
-# ─── Flow Mode: Switch ─────────────────────────────────────────────────────
-
-@router.callback_query(F.data == "flow_switch")
-async def flow_switch(callback: CallbackQuery, state: FSMContext):
-    try:
-        user_id = callback.from_user.id
-
-        # Сохраняем контекст текущего диалога для нового персонажа
-        history = await db.get_history(user_id, limit=settings.CONTEXT_WINDOW)
-        context_text = " | ".join([
-            f"{m['role']}: {m['content']}" for m in history
-        ]) if history else ""
-
-        await state.update_data(switch_context=context_text)
-        await state.set_state(FlowState.choosing_persona)
-
-        await callback.message.answer(
-            "Who would you like to talk to next?",
-            reply_markup=get_persona_keyboard()
-        )
-        await callback.answer()
-
-    except Exception as e:
-        logger.error(f"Error in flow switch: {e}")
         await callback.answer("Something went wrong.", show_alert=True)
 
 
@@ -302,17 +302,18 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
         )
         await db.save_message(user_id, "assistant", chat_response)
 
-        personas = get_all_personas()
-        persona_name = personas.get(persona_key, persona_key.capitalize())
-        switch_kb = get_flow_active_keyboard(persona_name)
-
-        await send_response_with_translate(
-            message,
-            chat_response,
-            should_reply_voice=True,
-            voice=voice,
-            extra_keyboard=switch_kb
-        )
+        # Flow Mode — голос с кнопками Text / Translate
+        voice_bytes = await groq_client.text_to_speech(chat_response, voice=voice)
+        if voice_bytes:
+            voice_file = BufferedInputFile(voice_bytes, filename="response.wav")
+            sent = await message.answer_voice(
+                voice_file,
+                reply_markup=get_flow_voice_keyboard(0)
+            )
+            _originals_cache[sent.message_id] = chat_response
+            await sent.edit_reply_markup(
+                reply_markup=get_flow_voice_keyboard(sent.message_id)
+            )
 
         # Если прощание — саммаризация в фоне + инкремент сессии
         if is_farewell:
@@ -530,3 +531,76 @@ async def handle_original(callback: CallbackQuery):
     except Exception as e:
         logger.error(f"Error in original callback: {e}")
         await callback.answer("Could not restore original.", show_alert=True)
+
+
+# ─── Flow Mode: Text / Translate кнопки под голосовым ─────────────────────
+
+@router.callback_query(F.data.startswith("flow_text_"))
+async def flow_show_text(callback: CallbackQuery):
+    """Показывает текст голосового ответа под самим голосовым"""
+    try:
+        message_id = int(callback.data.split("_")[2])
+        original = _originals_cache.get(message_id)
+
+        if not original:
+            await callback.answer("Text not available.", show_alert=True)
+            return
+
+        safe_text = html.escape(original)
+        await callback.message.reply(
+            f"💬 {safe_text}",
+            parse_mode="HTML",
+            reply_markup=get_flow_voice_text_keyboard(message_id)
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in flow_text callback: {e}")
+        await callback.answer("Error.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("flow_translate_"))
+async def flow_translate(callback: CallbackQuery):
+    """Переводит текст голосового ответа"""
+    try:
+        message_id = int(callback.data.split("_")[2])
+        original = _originals_cache.get(message_id)
+
+        if not original:
+            await callback.answer("Text not available.", show_alert=True)
+            return
+
+        translation = await groq_client.translate_text(original)
+        safe_translation = html.escape(translation)
+
+        await callback.message.reply(
+            f"🌐 {safe_translation}",
+            parse_mode="HTML",
+            reply_markup=get_flow_voice_translate_keyboard(message_id)
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in flow_translate callback: {e}")
+        await callback.answer("Translation failed.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("flow_original_"))
+async def flow_original(callback: CallbackQuery):
+    """Возвращает оригинальный текст после перевода"""
+    try:
+        message_id = int(callback.data.split("_")[2])
+        original = _originals_cache.get(message_id)
+
+        if not original:
+            await callback.answer("Text not available.", show_alert=True)
+            return
+
+        safe_text = html.escape(original)
+        await callback.message.edit_text(
+            f"💬 {safe_text}",
+            parse_mode="HTML",
+            reply_markup=get_flow_voice_text_keyboard(message_id)
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in flow_original callback: {e}")
+        await callback.answer("Error.", show_alert=True)
