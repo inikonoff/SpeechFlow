@@ -366,10 +366,8 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
 
         await db.save_message(user_id, "user", user_text)
 
-        # Детектируем прощание параллельно с остальным
         farewell_task = asyncio.create_task(groq_client.detect_farewell(user_text))
         history_task = asyncio.create_task(db.get_history(user_id, limit=settings.CONTEXT_WINDOW))
-
         history, is_farewell = await asyncio.gather(history_task, farewell_task)
 
         user_level = user.get("level", settings.DEFAULT_USER_LEVEL)
@@ -394,7 +392,7 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
             for item in analysis_data['vocabulary_items']:
                 await db.add_to_vocabulary(user_id, item)
 
-        # Проверяем использовал ли пользователь напомянутое слово → mastery +1
+        # Mastery check
         used_word = await db.find_word_in_text(user_id, user_text)
         if used_word:
             new_score = await db.increase_mastery(used_word["id"])
@@ -405,7 +403,7 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
                     parse_mode="HTML"
                 )
 
-        # Каждые 4 сообщения вплетаем напоминание о слове из словаря
+        # Vocab reminder каждые 4 сообщения
         remind_counter = await db.increment_vocab_remind_counter(user_id)
         if remind_counter >= 4:
             await db.reset_vocab_remind_counter(user_id)
@@ -424,12 +422,14 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
 
         await db.increment_user_metrics(user_id, tokens_used=0)
 
+        # Блок коррекции — всегда показываем
         safe_corrected = html.escape(analysis_data.get('corrected_sentence', user_text))
-        safe_explanation = html.escape(analysis_data.get('explanation', 'Ошибок не найдено.'))
-
+        safe_explanation = html.escape(analysis_data.get('explanation', ''))
         analysis_text = f"✅ <b>Correct</b>\n{safe_corrected}\n\n💡 <b>Why</b>\n{safe_explanation}"
         if analysis_data.get('vocabulary_items'):
             analysis_text += "\n\n📚 <i>New words added to your vocabulary</i>"
+
+        await message.answer(analysis_text, parse_mode="HTML")
 
         if not chat_response:
             chat_response = "Sorry, I couldn't formulate a response."
@@ -437,17 +437,25 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
         voice = user.get("voice") or settings.TTS_VOICE
 
         if should_reply_voice:
-            await message.answer(analysis_text, parse_mode="HTML")
+            # Голосовой ответ с кнопками Text / Translate
+            voice_bytes_out = await groq_client.text_to_speech(chat_response, voice=voice)
+            if voice_bytes_out:
+                voice_file_out = BufferedInputFile(voice_bytes_out, filename="response.wav")
+                sent = await message.answer_voice(
+                    voice_file_out,
+                    reply_markup=get_flow_voice_keyboard(0)
+                )
+                _originals_cache[sent.message_id] = chat_response
+                await sent.edit_reply_markup(
+                    reply_markup=get_flow_voice_keyboard(sent.message_id)
+                )
+        else:
+            # Текстовый режим — текст с кнопкой Translate
+            safe_response = html.escape(chat_response)
+            sent = await message.answer(f"💬 {safe_response}", parse_mode="HTML")
+            _originals_cache[sent.message_id] = chat_response
+            await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
 
-        await send_response_with_translate(
-            message,
-            chat_response,
-            should_reply_voice=should_reply_voice,
-            voice=voice,
-            analysis_text=analysis_text if not should_reply_voice else None
-        )
-
-        # Прощание — саммаризация в фоне
         if is_farewell:
             asyncio.create_task(run_summarization(user_id))
             logger.info(f"Farewell detected for user {user_id}, summarization scheduled")
