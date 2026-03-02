@@ -447,25 +447,18 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
 
         voice = user.get("voice") or settings.TTS_VOICE
 
+        # Голосовой ответ если нужен — без кнопок, просто аудио
         if should_reply_voice:
-            # Голосовой ответ с кнопками Text / Translate
             voice_bytes_out = await groq_client.text_to_speech(chat_response, voice=voice)
             if voice_bytes_out:
                 voice_file_out = BufferedInputFile(voice_bytes_out, filename="response.wav")
-                sent = await message.answer_voice(
-                    voice_file_out,
-                    reply_markup=get_flow_voice_keyboard(0)
-                )
-                _originals_cache[sent.message_id] = chat_response
-                await sent.edit_reply_markup(
-                    reply_markup=get_flow_voice_keyboard(sent.message_id)
-                )
-        else:
-            # Текстовый режим — текст с кнопкой Translate
-            safe_response = html.escape(chat_response)
-            sent = await message.answer(f"💬 {safe_response}", parse_mode="HTML")
-            _originals_cache[sent.message_id] = chat_response
-            await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
+                await message.answer_voice(voice_file_out)
+
+        # Текстовый ответ с кнопкой Translate
+        safe_response = html.escape(chat_response)
+        sent = await message.answer(f"💬 {safe_response}", parse_mode="HTML")
+        _originals_cache[sent.message_id] = chat_response
+        await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
 
         if is_farewell:
             asyncio.create_task(run_summarization(user_id))
