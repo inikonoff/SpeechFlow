@@ -215,10 +215,10 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
 
         user = await db.get_or_create_user(user_id)
         user_level = user.get("level", "intermediate")
+        existing_summary = await db.get_latest_summary(user_id)
 
         await callback.message.edit_text("...")
 
-        # Новый или Switch — разные приветствия
         if switch_context:
             greeting = await groq_client.generate_switch_opener(
                 persona_key, switch_context,
@@ -227,7 +227,8 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
         else:
             greeting = await groq_client.generate_persona_greeting(
                 persona_key, user_level,
-                session_count=user.get("session_count", 0)
+                session_count=user.get("session_count", 0),
+                summary=existing_summary
             )
 
         await db.save_message(user_id, "assistant", greeting)
@@ -275,16 +276,6 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             if not user_text:
                 await message.answer("Couldn't hear that. Try again.")
                 return
-
-            # Служебное сообщение-reply с кнопками Text / Translate под голосовым пользователя
-            hint = await message.reply(
-                "🎤",
-                reply_markup=get_flow_user_voice_keyboard(0)
-            )
-            _originals_cache[hint.message_id] = user_text
-            await hint.edit_reply_markup(
-                reply_markup=get_flow_user_voice_keyboard(hint.message_id)
-            )
         elif message.text:
             user_text = message.text.strip()
         else:
