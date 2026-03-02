@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone, timedelta
 from supabase import create_client, Client
@@ -283,10 +284,17 @@ class SupabaseDB:
         except Exception as e:
             logger.error(f"Error getting top error categories: {e}")
             return []
+
+    async def log_error(self, telegram_id: int, error_data: Dict[str, Any]) -> bool:
         try:
+            raw_category = error_data.get("category", "other") or "other"
+            # Нормализуем составные категории типа "grammar|structure" → "grammar"
+            category = re.split(r'[|/,]', raw_category.strip().lower())[0].strip()
+            if not category or category == "none":
+                return True
             error_entry = {
                 "user_id": telegram_id,
-                "category": error_data.get("category"),
+                "category": category,
                 "mistake_text": error_data.get("mistake_text"),
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
