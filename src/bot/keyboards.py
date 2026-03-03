@@ -23,6 +23,7 @@ def get_persona_keyboard() -> InlineKeyboardMarkup:
     personas = get_all_personas()
     for key, name in personas.items():
         builder.row(InlineKeyboardButton(text=name, callback_data=f"persona_{key}"))
+    builder.row(InlineKeyboardButton(text="← Back", callback_data="settings"))
     return builder.as_markup()
 
 
@@ -156,12 +157,51 @@ def get_flow_voice_translate_keyboard(message_id: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="🔤 Original", callback_data=f"flow_original_{message_id}"),
     )
     return builder.as_markup()
-    """Inline-кнопка Switch во время активного Flow диалога"""
-    builder = InlineKeyboardBuilder()
+
+
+# ─── Reply keyboards (постоянные кнопки внизу) ────────────────────────────
+
+def get_mode_keyboard() -> ReplyKeyboardMarkup:
+    """Три кнопки режимов — основное состояние"""
+    builder = ReplyKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(
-            text=f"↩ Switch ({persona_name})",
-            callback_data="flow_switch"
-        )
+        KeyboardButton(text="🎓 Tutor"),
+        KeyboardButton(text="✉️ PenFriend"),
+        KeyboardButton(text="🎙 Flow"),
     )
+    return builder.as_markup(resize_keyboard=True, persistent=True)
+
+
+def get_flow_start_keyboard() -> ReplyKeyboardMarkup:
+    """Алиас для обратной совместимости"""
+    return get_mode_keyboard()
+
+
+def get_tutor_keyboard() -> ReplyKeyboardMarkup:
+    builder = ReplyKeyboardBuilder()
+    builder.row(KeyboardButton(text="⏹ Stop Tutor"))
+    return builder.as_markup(resize_keyboard=True, persistent=True)
+
+
+def get_penfriend_keyboard() -> ReplyKeyboardMarkup:
+    builder = ReplyKeyboardBuilder()
+    builder.row(
+        KeyboardButton(text="↩ Switch"),
+        KeyboardButton(text="⏹ Stop PenFriend"),
+    )
+    return builder.as_markup(resize_keyboard=True, persistent=True)
+
+
+def get_correction_rate_keyboard(current_rate: int) -> InlineKeyboardMarkup:
+    from src.modes import CORRECTION_RATE_RELAXED, CORRECTION_RATE_BALANCED, CORRECTION_RATE_STRICT
+    options = [
+        (CORRECTION_RATE_RELAXED,  "😌 Relaxed"),
+        (CORRECTION_RATE_BALANCED, "⚖️ Balanced"),
+        (CORRECTION_RATE_STRICT,   "🎯 Strict"),
+    ]
+    builder = InlineKeyboardBuilder()
+    for rate, label in options:
+        text = f"✓ {label}" if rate == current_rate else label
+        builder.row(InlineKeyboardButton(text=text, callback_data=f"set_correction_{rate}"))
+    builder.row(InlineKeyboardButton(text="← Back", callback_data="settings"))
     return builder.as_markup()
