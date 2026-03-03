@@ -265,7 +265,9 @@ async def change_user_level(callback: CallbackQuery):
 
 
 @router.callback_query(F.data == "change_persona")
-async def change_persona(callback: CallbackQuery):
+async def change_persona(callback: CallbackQuery, state: FSMContext):
+    from src.bot.handlers.message import FlowState
+    await state.set_state(FlowState.choosing_persona)
     await callback.message.edit_text(
         "<b>Who would you like to talk to?</b>",
         reply_markup=get_persona_keyboard(),
