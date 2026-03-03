@@ -22,14 +22,6 @@ from src.bot.keyboards import (
     get_flow_voice_translate_keyboard,
     get_flow_user_voice_keyboard,
     get_persona_keyboard,
-    get_mode_keyboard,
-    get_tutor_keyboard,
-    get_penfriend_keyboard,
-)
-from src.modes import (
-    MODE_TUTOR, MODE_PENFRIEND, MODE_FLOW,
-    get_penfriend_system_prompt,
-    CORRECTION_RATE_DEFAULT,
 )
 
 router = Router()
@@ -177,48 +169,9 @@ async def activate_flow(message: Message, state: FSMContext):
 async def deactivate_flow(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
-        "Flow Mode off.",
-        reply_markup=get_mode_keyboard()
+        "Flow Mode off. Back to normal mode.",
+        reply_markup=get_flow_start_keyboard()
     )
-
-
-# ─── Tutor Mode ────────────────────────────────────────────────────────────
-
-@router.message(F.text == "🎓 Tutor")
-async def activate_tutor(message: Message, state: FSMContext):
-    await state.clear()
-    await db.update_mode(message.from_user.id, MODE_TUTOR)
-    await message.answer(
-        "🎓 <b>Tutor Mode</b>\n\nSend voice or text in English. "
-        "I will correct mistakes and explain them.",
-        parse_mode="HTML",
-        reply_markup=get_tutor_keyboard()
-    )
-
-
-@router.message(F.text == "⏹ Stop Tutor")
-async def deactivate_tutor(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer("Back to mode selection.", reply_markup=get_mode_keyboard())
-
-
-# ─── PenFriend Mode ────────────────────────────────────────────────────────
-
-@router.message(F.text == "✉️ PenFriend")
-async def activate_penfriend(message: Message, state: FSMContext):
-    await state.set_state(FlowState.choosing_persona)
-    await db.update_mode(message.from_user.id, MODE_PENFRIEND)
-    await message.answer(
-        "✉️ <b>PenFriend Mode</b>\n\nWho would you like to write to?",
-        parse_mode="HTML",
-        reply_markup=get_persona_keyboard()
-    )
-
-
-@router.message(F.text == "⏹ Stop PenFriend")
-async def deactivate_penfriend(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer("Back to mode selection.", reply_markup=get_mode_keyboard())
 
 
 @router.message(F.text == "↩ Switch")
@@ -254,14 +207,8 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
 
         fsm_data = await state.get_data()
         switch_context = fsm_data.get("switch_context", "")
-        user = await db.get_or_create_user(user_id)
 
-        await state.update_data(
-            persona_key=persona_key,
-            voice=voice,
-            switch_context="",
-            active_mode=user.get("mode", MODE_FLOW)
-        )
+        await state.update_data(persona_key=persona_key, voice=voice, switch_context="")
         await state.set_state(FlowState.active)
         await db.update_user_persona(user_id, persona_key)
         await db.update_user_voice(user_id, voice)
@@ -320,15 +267,6 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
         fsm_data = await state.get_data()
         persona_key = fsm_data.get("persona_key") or user.get("persona", "greg")
         voice = fsm_data.get("voice") or get_persona_voice(persona_key)
-        active_mode = fsm_data.get("active_mode", MODE_FLOW)
-
-        # ─── Защита PenFriend от голосовых ────────────────────────────────
-        if active_mode == MODE_PENFRIEND and message.voice:
-            await message.answer(
-                "✉️ PenFriend is text-only.\n"
-                "Try typing what you wanted to say — it is good writing practice too."
-            )
-            return
 
         if message.voice:
             await message.bot.send_chat_action(user_id, "typing")
