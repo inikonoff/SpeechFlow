@@ -35,19 +35,19 @@ async def cmd_start(message: Message, state: FSMContext):
 
 
 @router.callback_query(F.data.startswith("level_"))
-async def process_level_and_ask_persona(callback: CallbackQuery, state: FSMContext):
+async def process_level(callback: CallbackQuery, state: FSMContext):
     try:
         level = callback.data.split("_")[1]
         await db.update_user_level(callback.from_user.id, level)
         await callback.message.edit_text(
-            f"Level set to {level.upper()}. Choose your mode:",
+            f"Level set to {level.upper()}.",
             parse_mode="HTML",
         )
         await callback.message.answer(
-            "Tutor - corrections and explanations\n"
-            "PenFriend - text chat with a character\n"
-            "Flow - pure voice conversation",
-            parse_mode="HTML",
+            "Choose your mode:\n\n"
+            "Tutor: corrections and explanations\n"
+            "PenFriend: text chat with a character\n"
+            "Flow: pure voice conversation",
             reply_markup=get_mode_keyboard()
         )
         await callback.answer()
