@@ -262,6 +262,47 @@ User Level: {level}"""
             logger.error(f"❌ Ошибка Flow генерации: {e}")
             return "Hey, still here. Go on."
 
+    async def generate_penfriend_response(
+        self,
+        text: str,
+        persona_key: str,
+        history: Optional[List[Dict[str, str]]] = None,
+        summary: Optional[str] = None,
+        correction_rate: int = 50,
+        top_errors: Optional[List[str]] = None
+    ) -> str:
+        from src.modes import get_penfriend_system_prompt
+        persona_prompt = get_persona_prompt(persona_key, session_count=0)
+        system_prompt = get_penfriend_system_prompt(
+            persona_prompt=persona_prompt,
+            correction_rate=correction_rate,
+            session_errors=top_errors or []
+        )
+        if summary:
+            system_prompt += (
+                f"\n\n# WHAT YOU KNOW ABOUT THIS PERSON\n{summary}\n"
+                f"Use this naturally, never dump it all at once."
+            )
+        messages = [{"role": "system", "content": system_prompt}]
+        if history:
+            messages.extend(history)
+        messages.append({"role": "user", "content": text})
+
+        async def _penfriend(client):
+            response = await client.chat.completions.create(
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                messages=messages,
+                temperature=0.85,
+                max_tokens=200
+            )
+            return response.choices[0].message.content
+
+        try:
+            return await self._make_request(_penfriend)
+        except Exception as e:
+            logger.error(f"PenFriend generation error: {e}")
+            return "Ha, interesting. Tell me more."
+
     async def generate_switch_opener(
         self,
         new_persona_key: str,
