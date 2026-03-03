@@ -15,7 +15,6 @@ from src.bot.keyboards import (
     get_settings_keyboard,
     get_back_to_menu_keyboard,
     get_main_menu_keyboard,
-    get_correction_rate_keyboard,
 )
 from src.personas import get_all_personas
 from src.services.supabase_db import db

@@ -177,8 +177,8 @@ async def activate_flow(message: Message, state: FSMContext):
 async def deactivate_flow(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
-        "Flow Mode off. Back to normal mode.",
-        reply_markup=get_flow_start_keyboard()
+        "Flow Mode off.",
+        reply_markup=get_mode_keyboard()
     )
 
 
@@ -254,12 +254,13 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
 
         fsm_data = await state.get_data()
         switch_context = fsm_data.get("switch_context", "")
+        user = await db.get_or_create_user(user_id)
 
         await state.update_data(
             persona_key=persona_key,
             voice=voice,
             switch_context="",
-            active_mode=fsm_data.get("active_mode", MODE_FLOW)
+            active_mode=user.get("mode", MODE_FLOW)
         )
         await state.set_state(FlowState.active)
         await db.update_user_persona(user_id, persona_key)
@@ -319,10 +320,10 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
         fsm_data = await state.get_data()
         persona_key = fsm_data.get("persona_key") or user.get("persona", "greg")
         voice = fsm_data.get("voice") or get_persona_voice(persona_key)
-        current_mode = fsm_data.get("active_mode", MODE_FLOW)
+        active_mode = fsm_data.get("active_mode", MODE_FLOW)
 
-        # ─── Защита PenFriend от голосовых ────────────────────────────────────────
-        if current_mode == MODE_PENFRIEND and message.voice:
+        # ─── Защита PenFriend от голосовых ────────────────────────────────
+        if active_mode == MODE_PENFRIEND and message.voice:
             await message.answer(
                 "✉️ PenFriend is text-only.\n"
                 "Try typing what you wanted to say — it is good writing practice too."

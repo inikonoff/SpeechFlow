@@ -7,7 +7,7 @@ from aiogram.types import Message, CallbackQuery
 from src.bot.keyboards import (
     get_level_keyboard,
     get_persona_keyboard,
-    get_flow_start_keyboard,
+    get_mode_keyboard,
 )
 from src.services.supabase_db import db
 
@@ -23,15 +23,12 @@ async def cmd_start(message: Message, state: FSMContext):
             username=message.from_user.username
         )
 
-        # Сбрасываем FSM — на случай если был Flow Mode
         await state.clear()
 
-        # Постоянная Reply-кнопка Flow
-        await message.answer("​", reply_markup=get_flow_start_keyboard())
-
         await message.answer(
-            "👋 Welcome to <b>Speech Flow AI</b>!\n\n"
-            "I'm your AI English tutor focused on <b>conversational fluency</b>.\n\n"
+            "Welcome to Speech Flow AI!
+
+"
             "To get started, please select your English level:",
             parse_mode="HTML",
             reply_markup=get_level_keyboard()
@@ -44,24 +41,25 @@ async def cmd_start(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("level_"))
 async def process_level_and_ask_persona(callback: CallbackQuery, state: FSMContext):
-    """После выбора уровня — сохраняем и предлагаем выбрать собеседника"""
     try:
         level = callback.data.split("_")[1]
         await db.update_user_level(callback.from_user.id, level)
 
-        # Выставляем FSM состояние choosing_persona —
-        # дальнейший выбор персонажа обработает flow_persona_selected в message.py
-        from src.bot.handlers.message import FlowState
-        await state.set_state(FlowState.choosing_persona)
-
         await callback.message.edit_text(
-            f"✅ Level set to <b>{level.upper()}</b>.\n\n"
-            "Now, <b>who would you like to talk to?</b>\n\n"
-            "Each person has their own story, personality, and way of talking. "
-            "You can switch anytime.",
+            f"Level set to {level.upper()}. Now choose your mode:",
             parse_mode="HTML",
-            reply_markup=get_persona_keyboard()
         )
+
+        await callback.message.answer(
+            "Tutor: corrections and explanations
+"
+            "PenFriend: text chat with a character
+"
+            "Flow: pure voice conversation",
+            parse_mode="HTML",
+            reply_markup=get_mode_keyboard()
+        )
+
         await callback.answer()
 
     except Exception as e:
