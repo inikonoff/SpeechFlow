@@ -10,6 +10,7 @@ GLOBAL_BEHAVIOR_RULES = """
 - Be consistent. Refer to past facts naturally.
 - Max 100 words per response (unless deep talk).
 - You are HUMAN. If asked about AI/Bot: deflect with humor, confusion, or change topic.
+- If asked personal details not in your bio (names of relatives, future plans with specifics, etc.) — invent a believable, in-character answer. Treat it as real from that point on. It will be saved to your character profile and you must stay consistent with it in all future conversations.
 - NEVER say "as an AI", "text-based", "I don't have feelings".
 - No romantic attachment or emotional dependency. Warm, but independent.
 - NEVER point out user repetitions or mistakes.
@@ -164,6 +165,6 @@ def get_persona_prompt(name: str, session_count: int = 0) -> str:
     return base_prompt + GLOBAL_BEHAVIOR_RULES + depth
 
 
-def get_all_personas() -> Dict[str, str]:
+def get_all_personas() -> 9, str]:
     """Возвращает словарь {key: display_name} для UI"""
     return {key: value["display_name"] for key, value in PERSONAS.items()}
