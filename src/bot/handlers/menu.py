@@ -288,6 +288,44 @@ async def back_to_menu(callback: CallbackQuery):
         await callback.answer("Error.", show_alert=True)
 
 
+@router.callback_query(F.data == "correction_rate")
+async def show_correction_rate(callback: CallbackQuery):
+    try:
+        from src.bot.keyboards import get_correction_rate_keyboard
+        from src.modes import correction_rate_label
+        user = await db.get_or_create_user(callback.from_user.id)
+        rate = user.get("correction_rate", 50)
+        await callback.message.edit_text(
+            f"✏️ <b>Correction Sensitivity</b>\n\n"
+            f"Current: <b>{correction_rate_label(rate)}</b>\n\n"
+            f"😌 <b>Relaxed</b> — only serious errors that confuse native speakers\n"
+            f"⚖️ <b>Balanced</b> — clear grammatical errors corrected\n"
+            f"🎯 <b>Strict</b> — most errors corrected naturally",
+            parse_mode="HTML",
+            reply_markup=get_correction_rate_keyboard(rate)
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in correction_rate: {e}")
+        await callback.answer("Error.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("set_correction_"))
+async def set_correction_rate(callback: CallbackQuery):
+    try:
+        from src.bot.keyboards import get_correction_rate_keyboard
+        from src.modes import correction_rate_label
+        rate = int(callback.data.split("_")[2])
+        await db.update_correction_rate(callback.from_user.id, rate)
+        await callback.message.edit_reply_markup(
+            reply_markup=get_correction_rate_keyboard(rate)
+        )
+        await callback.answer(f"Set to {correction_rate_label(rate)}")
+    except Exception as e:
+        logger.error(f"Error in set_correction_rate: {e}")
+        await callback.answer("Error.", show_alert=True)
+
+
 @router.callback_query(F.data == "my_stats")
 async def cq_show_stats(callback: CallbackQuery):
     try:
