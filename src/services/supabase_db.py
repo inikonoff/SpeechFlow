@@ -156,28 +156,6 @@ class SupabaseDB:
             logger.error(f"Error incrementing session count: {e}")
             return 0
 
-    async def update_mode(self, telegram_id: int, mode: str) -> bool:
-        """Сохраняет активный режим: tutor / penfriend / flow"""
-        try:
-            self.client.table("users").update(
-                {"mode": mode}
-            ).eq("telegram_id", telegram_id).execute()
-            return True
-        except Exception as e:
-            logger.error(f"Error updating mode: {e}")
-            return False
-
-    async def update_correction_rate(self, telegram_id: int, rate: int) -> bool:
-        """Сохраняет степень придирчивости коррекции для PenFriend Mode"""
-        try:
-            self.client.table("users").update(
-                {"correction_rate": rate}
-            ).eq("telegram_id", telegram_id).execute()
-            return True
-        except Exception as e:
-            logger.error(f"Error updating correction rate: {e}")
-            return False
-
     # ─── Словарь ───────────────────────────────────────────────────────────
 
     async def add_to_vocabulary(self, telegram_id: int, word_data: Dict[str, Any]) -> bool:
