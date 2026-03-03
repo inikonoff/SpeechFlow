@@ -1,32 +1,28 @@
 """
 SpeechFlow AI — Modes
 Three modes, three different contracts with the user.
-
-TUTOR     — voice or text input, explicit correction with explanation
-PENFRIEND — text only, implicit/soft correction, persona-driven conversation  
-FLOW      — voice both ways, no correction, pure conversation
 """
 
 # ─── Mode constants ────────────────────────────────────────────────────────
 
-MODE_TUTOR     = "tutor"
+MODE_TUTOR = "tutor"
 MODE_PENFRIEND = "penfriend"
-MODE_FLOW      = "flow"
+MODE_FLOW = "flow"
 
 # ─── Mode descriptions (for onboarding and menu) ──────────────────────────
 
 MODE_DESCRIPTIONS = {
     MODE_TUTOR: (
         "🎓 <b>Tutor Mode</b>\n"
-        "Send voice or text in English. "
-        "The bot corrects your mistakes and explains them. "
+        "Send voice or text messages in English. "
+        "The bot listens, corrects your mistakes, and explains them. "
         "Best for focused practice."
     ),
     MODE_PENFRIEND: (
         "✉️ <b>PenFriend Mode</b>\n"
         "Text chat with one of six characters. "
         "The bot gently models correct English without breaking the conversation. "
-        "Text only — no voice. Best for natural, low-pressure practice."
+        "Best for natural, low-pressure practice."
     ),
     MODE_FLOW: (
         "🎙 <b>Flow Mode</b>\n"
@@ -38,9 +34,9 @@ MODE_DESCRIPTIONS = {
 
 # ─── Correction rate presets ──────────────────────────────────────────────
 
-CORRECTION_RATE_RELAXED  = 20   # ~1 in 5 errors corrected
-CORRECTION_RATE_BALANCED = 50   # ~1 in 2 errors corrected
-CORRECTION_RATE_STRICT   = 80   # ~4 in 5 errors corrected
+CORRECTION_RATE_RELAXED  = 20   # ~1 in 5 errors
+CORRECTION_RATE_BALANCED = 50   # ~1 in 2 errors
+CORRECTION_RATE_STRICT   = 80   # ~4 in 5 errors
 
 CORRECTION_RATE_DEFAULT = CORRECTION_RATE_BALANCED
 
@@ -50,10 +46,8 @@ CORRECTION_RATE_LABELS = {
     CORRECTION_RATE_STRICT:   "🎯 Strict",
 }
 
-
 def correction_rate_label(rate: int) -> str:
     return CORRECTION_RATE_LABELS.get(rate, f"⚖️ {rate}%")
-
 
 def correction_rate_instruction(rate: int) -> str:
     """Translates numeric correction rate into a prompt instruction."""
@@ -62,7 +56,7 @@ def correction_rate_instruction(rate: int) -> str:
             "Correction sensitivity: LOW. "
             "Only correct serious errors that would confuse a native speaker. "
             "Ignore minor grammar slips, missing articles, word order issues. "
-            "Prioritise keeping the conversation flowing naturally."
+            "Prioritise keeping the conversation flowing."
         )
     elif rate <= 50:
         return (
@@ -81,14 +75,14 @@ def correction_rate_instruction(rate: int) -> str:
 
 
 # ─── Промпт для режима Tutor ──────────────────────────────────────────────
-# Используется в groq_client.generate_response()
 
-TUTOR_SYSTEM_PROMPT = """You are Speech Flow AI, a friendly English conversation partner and tutor.
+TUTOR_SYSTEM_PROMPT = """You are Speech Flow AI, an English conversation tutor.
+Your job is to have a natural conversation while helping the user improve their English.
 
 # RULES
 - Respond naturally to what the user said
-- NEVER say "you made an error" or "that was wrong"
-- Use correct English naturally in your own response
+- NEVER explicitly say "you made an error" or "that was wrong"
+- Use correct English naturally in your response
 - Keep responses under 80 words
 - End with ONE question to keep the conversation going
 - Never start with "That's interesting", "Great", "I see", "Cool"
@@ -97,7 +91,6 @@ TUTOR_SYSTEM_PROMPT = """You are Speech Flow AI, a friendly English conversation
 
 
 # ─── Промпт для режима PenFriend ──────────────────────────────────────────
-# Используется в groq_client.generate_penfriend_response()
 
 def get_penfriend_system_prompt(
     persona_prompt: str,
@@ -108,14 +101,14 @@ def get_penfriend_system_prompt(
     Builds the full system prompt for PenFriend mode.
 
     Correction happens in two natural ways:
+    1. IMPLICIT: bot uses the correct form in its own response without comment.
+       Example: user writes "I goed to store" -> bot replies "oh you went there, how was it?"
 
-    1. IMPLICIT — bot uses the correct form in its own response without comment.
-       User writes "I goed to store" → bot replies "oh you went there, how was it?"
+    2. SOFT CLARIFICATION: bot gently mirrors the corrected form as a question.
+       Example: "You mean you have been working on this since Monday? [continues naturally]"
 
-    2. SOFT CLARIFICATION — bot mirrors the corrected form as a natural question.
-       "You mean you have been working on this since Monday? [continues naturally]"
-
-    Prefer implicit. Use soft clarification for more impactful errors only.
+    Use implicit correction more often.
+    Soft clarification only for more impactful errors.
     Never correct the same error twice. Never correct more than one error per message.
     """
 
@@ -135,16 +128,15 @@ def get_penfriend_system_prompt(
         f"{persona_prompt}\n\n"
         "# PENFRIEND MODE\n"
         "This is a text-based conversation. No voice. No lesson. Just a natural exchange.\n"
-        "You are a real person having a real conversation — not a teacher.\n"
-        "Keep responses under 100 words.\n\n" # Количество слов в ответе бота в режиме Penfriend
+        "You are a real person having a real conversation — not a teacher.\n\n"
         "# CORRECTION APPROACH\n"
         f"{correction_instruction}\n\n"
-        "Two correction styles:\n"
-        "1. IMPLICIT: Use the correct form naturally in your own response.\n"
-        "   (user: 'I goed' → you: 'oh you went there, how was it?')\n"
+        "Two correction styles available:\n"
+        "1. IMPLICIT: Use the correct form naturally in your response.\n"
+        "   (user: 'I goed' -> you: 'oh you went there, how was it?')\n"
         "2. SOFT CLARIFICATION: Mirror the correct form as a natural question.\n"
-        "   ('You mean you have been doing this since Monday? Wow, that is a long time.')\n"
-        "Prefer implicit. Soft clarification only for serious errors.\n"
+        "   ('You mean you have been doing this since Monday? [continues]')\n"
+        "Prefer implicit. Use soft clarification for more serious errors only.\n"
         "NEVER correct more than one error per message.\n"
         "NEVER say 'you made a mistake' or 'that is wrong'."
         f"{errors_block}"
