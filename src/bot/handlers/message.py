@@ -51,8 +51,8 @@ def _penfriend_typing_delay(text: str) -> float:
     ~55 слов/мин — спокойный темп. Диапазон: 2–9 секунд.
     """
     words = len(text.split())
-    seconds = (words / 55) * 60
-    return max(2.0, min(seconds, 9.0))
+    seconds = (words / 55) * 60 * 0.7
+    return max(1.4, min(seconds, 6.3))
 
 
 # ─── FSM ───────────────────────────────────────────────────────────────────
@@ -402,26 +402,31 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
         )
         await db.save_message(user_id, "assistant", chat_response)
 
-        # PenFriend — имитация набора текста
+        persona_display = get_persona_display(persona_key)
+
         if active_mode == MODE_PENFRIEND:
+            # PenFriend — только текст с имитацией набора
             delay = _penfriend_typing_delay(chat_response)
             await message.bot.send_chat_action(user_id, "typing")
             await asyncio.sleep(delay)
-
-        # Flow Mode — голос с caption (имя персонажа) и кнопками Text / Translate
-        persona_display = get_persona_display(persona_key)
-        voice_bytes = await groq_client.text_to_speech(chat_response, voice=voice)
-        if voice_bytes:
-            voice_file = BufferedInputFile(voice_bytes, filename="response.wav")
-            sent = await message.answer_voice(
-                voice_file,
-                caption=persona_display,
-                reply_markup=get_flow_voice_keyboard(0)
-            )
+            safe_response = html.escape(chat_response)
+            sent = await message.answer(f"💬 {safe_response}", parse_mode="HTML")
             _originals_cache[sent.message_id] = chat_response
-            await sent.edit_reply_markup(
-                reply_markup=get_flow_voice_keyboard(sent.message_id)
-            )
+            await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
+        else:
+            # Flow Mode — голос с caption и кнопками Text / Translate
+            voice_bytes = await groq_client.text_to_speech(chat_response, voice=voice)
+            if voice_bytes:
+                voice_file = BufferedInputFile(voice_bytes, filename="response.wav")
+                sent = await message.answer_voice(
+                    voice_file,
+                    caption=persona_display,
+                    reply_markup=get_flow_voice_keyboard(0)
+                )
+                _originals_cache[sent.message_id] = chat_response
+                await sent.edit_reply_markup(
+                    reply_markup=get_flow_voice_keyboard(sent.message_id)
+                )
 
         # Если прощание — саммаризация в фоне + инкремент сессии
         if is_farewell:
