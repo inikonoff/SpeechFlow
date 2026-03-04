@@ -11,7 +11,7 @@ from src.config import settings, ADMIN_IDS
 from src.services.supabase_db import db
 from src.services.groq_client import groq_client
 from src.utils.audio import save_voice_file, cleanup_file, read_file_bytes
-from src.personas import get_persona_voice, get_persona_display
+from src.personas import get_persona_voice, get_persona_display, get_persona_tutor_prompt
 from src.bot.keyboards import (
     get_translate_keyboard,
     get_original_keyboard,
@@ -40,6 +40,19 @@ _originals_cache: Dict[int, str] = {}
 
 # Порог схлопывания саммари
 SUMMARY_MERGE_THRESHOLD = 4
+
+
+
+# ─── PenFriend typing delay ────────────────────────────────────────────────
+
+def _penfriend_typing_delay(text: str) -> float:
+    """
+    Имитирует время набора текста живым человеком.
+    ~55 слов/мин — спокойный темп. Диапазон: 2–9 секунд.
+    """
+    words = len(text.split())
+    seconds = (words / 55) * 60
+    return max(2.0, min(seconds, 9.0))
 
 
 # ─── FSM ───────────────────────────────────────────────────────────────────
@@ -164,7 +177,7 @@ async def run_merge_summaries(user_id: int) -> None:
 
 # ─── Flow Mode: активация ──────────────────────────────────────────────────
 
-@router.message(F.text == "▶ Flow")
+@router.message(F.text == "🎙 Flow")
 async def activate_flow(message: Message, state: FSMContext):
     await state.set_state(FlowState.choosing_persona)
     await message.answer(
@@ -184,8 +197,11 @@ async def deactivate_flow(message: Message, state: FSMContext):
 @router.message(F.text == "🎓 Tutor")
 async def activate_tutor(message: Message, state: FSMContext):
     await state.clear()
-    await db.update_mode(message.from_user.id, MODE_TUTOR)
-    await message.answer("🎓 Tutor Mode", parse_mode="HTML", reply_markup=get_tutor_keyboard())
+    user_id = message.from_user.id
+    await db.update_mode(user_id, MODE_TUTOR)
+    await db.update_user_persona(user_id, "mrs_smith")
+    await db.update_user_voice(user_id, get_persona_voice("mrs_smith"))
+    await message.answer("🎓 Tutor Mode on — 📚 Mrs. Smith", parse_mode="HTML", reply_markup=get_tutor_keyboard())
 
 
 @router.message(F.text == "⏹ Stop Tutor")
@@ -254,7 +270,7 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
 
         # Смена персонажа из Settings — просто сохраняем и возвращаем в настройки
         if from_settings:
-            from src.personas import get_all_personas, get_persona_display
+            from src.personas import get_all_personas
             display_name = get_persona_display(persona_key)
             await state.clear()
             from src.bot.keyboards import get_settings_keyboard
@@ -385,6 +401,12 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             top_errors=top_errors
         )
         await db.save_message(user_id, "assistant", chat_response)
+
+        # PenFriend — имитация набора текста
+        if active_mode == MODE_PENFRIEND:
+            delay = _penfriend_typing_delay(chat_response)
+            await message.bot.send_chat_action(user_id, "typing")
+            await asyncio.sleep(delay)
 
         # Flow Mode — голос с caption (имя персонажа) и кнопками Text / Translate
         persona_display = get_persona_display(persona_key)
