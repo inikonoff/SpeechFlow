@@ -477,7 +477,8 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
 
         farewell_task = asyncio.create_task(groq_client.detect_farewell(user_text))
         history_task = asyncio.create_task(db.get_history(user_id, limit=settings.CONTEXT_WINDOW))
-        history, is_farewell = await asyncio.gather(history_task, farewell_task)
+        summary_task = asyncio.create_task(db.get_latest_summary(user_id))
+        history, is_farewell, summary = await asyncio.gather(history_task, farewell_task, summary_task)
 
         user_level = user.get("level", settings.DEFAULT_USER_LEVEL)
         should_reply_voice = (
@@ -492,7 +493,8 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
             telegram_id=user_id,
             user_text=user_text,
             user_level=user_level,
-            history=history
+            history=history,
+            summary=summary
         )
 
         await db.save_message(user_id, "assistant", chat_response)
