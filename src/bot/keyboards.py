@@ -43,7 +43,6 @@ def get_settings_keyboard(notifications_enabled: bool) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text=notif_text,                  callback_data="toggle_notifications"))
     builder.row(InlineKeyboardButton(text="📊 Change Level",           callback_data="change_level"))
-    builder.row(InlineKeyboardButton(text="🗣 Change Partner",         callback_data="change_persona"))
     builder.row(InlineKeyboardButton(text="✏️ Correction Sensitivity", callback_data="correction_rate"))
     builder.row(InlineKeyboardButton(text="← Back",                    callback_data="back_to_menu"))
     return builder.as_markup()
