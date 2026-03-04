@@ -7,7 +7,7 @@ from typing import List, Optional, Dict, Any, Tuple
 from openai import AsyncOpenAI
 
 from src.config import settings
-from src.personas import get_persona_prompt, get_persona_voice
+from src.personas import get_persona_prompt, get_persona_voice, get_persona_tutor_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -682,16 +682,57 @@ User Level: {level}"""
 
     # ─── Обычный режим: полная обработка ──────────────────────────────────
 
+    # ─── Генерация ответа (Tutor Mode — Mrs. Smith) ────────────────────────
+
+    async def generate_tutor_response(
+        self,
+        text: str,
+        user_level: str,
+        history: Optional[List[Dict[str, str]]] = None,
+        summary: Optional[str] = None
+    ) -> str:
+        tutor_prompt = get_persona_tutor_prompt("mrs_smith")
+
+        memory_block = ""
+        if summary:
+            memory_block = f"\n\n# WHAT YOU KNOW ABOUT THIS STUDENT\n{summary}"
+
+        system_prompt = (
+            f"{tutor_prompt}{memory_block}\n\n"
+            f"# STUDENT LEVEL\n{user_level.upper()}"
+        )
+
+        messages = [{"role": "system", "content": system_prompt}]
+        if history:
+            messages.extend(history)
+        messages.append({"role": "user", "content": text})
+
+        async def _chat(client):
+            response = await client.chat.completions.create(
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                messages=messages,
+                temperature=0.75,
+                max_tokens=300
+            )
+            return response.choices[0].message.content
+
+        try:
+            return await self._make_request(_chat)
+        except Exception as e:
+            logger.error(f"❌ Ошибка generate_tutor_response: {e}")
+            return "Tell me more — I'm listening."
+
     async def process_user_message(
         self,
         telegram_id: int,
         user_text: str,
         user_level: str,
-        history: Optional[List[Dict[str, str]]] = None
+        history: Optional[List[Dict[str, str]]] = None,
+        summary: Optional[str] = None
     ) -> Tuple[str, Dict[str, Any]]:
         try:
             correction_task = self.correct_text(user_text, user_level)
-            response_task = self.generate_response(user_text, user_level, history=history)
+            response_task = self.generate_tutor_response(user_text, user_level, history=history, summary=summary)
 
             correction_result, chat_response = await asyncio.gather(correction_task, response_task)
 
