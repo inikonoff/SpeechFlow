@@ -445,7 +445,8 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
 
         elif message.text:
             user_text = message.text.strip()
-            if not user_text or user_text.startswith("/"):
+            BUTTON_TEXTS = {"🎓 Tutor", "✉️ PenFriend", "🎙 Flow", "⏹ Stop Flow", "⏹ Stop Tutor", "⏹ Stop PenFriend", "↩ Switch"}
+            if not user_text or user_text.startswith("/") or user_text in BUTTON_TEXTS:
                 return
         else:
             return
