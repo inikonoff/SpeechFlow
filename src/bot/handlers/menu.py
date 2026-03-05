@@ -27,26 +27,25 @@ logger = logging.getLogger(__name__)
 
 _how_to_originals: Dict[int, str] = {}
 
-HOW_TO_TEXT = """🗣 <b>How to use Speech Flow AI</b>
+HOW_TO_TEXT = """🗣 <b>Speech Flow AI — How it works</b>
 
-<b>Normal Mode</b>
-1. <b>Speak or write in English</b> — your message is analyzed for errors
-2. <b>Natural conversation</b> — the bot keeps the dialogue flowing
-3. <b>Integrated corrections</b> — mistakes are corrected with explanation in Russian
-4. <b>Vocabulary building</b> — new words are saved to your dictionary automatically
-5. <b>Voice messages recommended</b> — speaking practice is the fastest path to fluency
+<b>🎓 Tutor Mode</b>
+Speak or write in English. Mrs. Smith corrects mistakes naturally and explains them in Russian. No red pen — just a conversation that makes you better.
 
-<b>▶ Flow Mode</b>
-6. <b>Press ▶ Flow</b> — no corrections, no analysis, just real conversation
-7. <b>Choose your conversation partner</b> — six different people, each with their own personality and voice
-8. <b>Talk freely</b> — your partner listens and responds naturally
-9. <b>Switch partners anytime</b> — tap Switch and your new partner picks up the thread
-10. <b>Press ⏹ Stop Flow</b> to return to Normal Mode
+<b>✉️ PenFriend Mode</b>
+Text chat with one of six characters. Each has their own life, personality, and way of speaking. Your English is shaped gently without breaking the flow.
 
-💡 <b>Tips</b>
-• Flow Mode is where real fluency happens — use it often
-• The bot will occasionally remind you of saved words — try to use them
-• Check your stats to track progress over time"""
+<b>🎙 Flow Mode</b>
+Pure voice conversation with a character. No corrections, no analysis — just real talk. This is where fluency actually happens. Use <b>↩ Switch</b> to change partners anytime.
+
+<b>👥 Characters</b>
+Greg 🧑‍⚕️ · Mark 👨‍🍳 · Junior 👨‍💻 · Mrs. Smith 👩‍🏫 · Summer 🌍 · Jane ☕
+Six people, one small world. Each remembers your conversations.
+
+<b>📚 Vocabulary &amp; Stats</b>
+New words are saved automatically as you chat. Use /stats to track your progress and /vocabulary to review your words.
+
+💡 Flow Mode is where real fluency happens — use it often."""
 
 
 # ─── Mastery helpers ───────────────────────────────────────────────────────
@@ -264,6 +263,58 @@ async def change_user_level(callback: CallbackQuery):
         parse_mode="HTML"
     )
     await callback.answer()
+
+
+@router.callback_query(F.data == "change_persona")
+async def change_persona(callback: CallbackQuery, state: FSMContext):
+    from src.bot.handlers.message import FlowState
+    await state.update_data(from_settings=True)
+    await state.set_state(FlowState.choosing_persona)
+    await callback.message.edit_text(
+        "<b>Who would you like to talk to?</b>",
+        reply_markup=get_persona_keyboard(),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("persona_"), FlowState.choosing_persona)
+async def menu_persona_selected(callback: CallbackQuery, state: FSMContext):
+    """Перехватывает persona_* когда пришли из Settings (from_settings=True)"""
+    try:
+        fsm_data = await state.get_data()
+        if not fsm_data.get("from_settings"):
+            return  # отдаём управление flow_persona_selected в message.py
+
+        from src.personas import get_all_personas, get_persona_display
+        from src.services.supabase_db import db as _db
+        persona_key = callback.data.split("_", 1)[1]
+        personas = get_all_personas()
+        if persona_key not in personas:
+            await callback.answer("Unknown persona.", show_alert=True)
+            return
+
+        user_id = callback.from_user.id
+        from src.personas import get_persona_voice
+        voice = get_persona_voice(persona_key)
+        await _db.update_user_persona(user_id, persona_key)
+        await _db.update_user_voice(user_id, voice)
+
+        display_name = get_persona_display(persona_key)
+        await state.clear()
+
+        user = await _db.get_or_create_user(user_id)
+        notif = user.get("notifications_enabled", True)
+        await callback.message.edit_text(
+            f"👤 Now talking to {display_name}\n\n⚙️ <b>Settings</b>",
+            parse_mode="HTML",
+            reply_markup=get_settings_keyboard(notif)
+        )
+        await callback.answer()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Error in menu_persona_selected: {e}")
+        await callback.answer("Something went wrong.", show_alert=True)
 
 
 @router.callback_query(F.data == "back_to_menu")
