@@ -335,20 +335,29 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
         else:
             await callback.message.answer(f"🎙 Flow Mode — {persona_display}", parse_mode="HTML", reply_markup=get_flow_stop_keyboard())
 
-        # Приветствие — голос с caption (имя персонажа)
-        voice_bytes = await groq_client.text_to_speech(greeting, voice=voice)
-        if voice_bytes:
-            voice_file = BufferedInputFile(voice_bytes, filename="greeting.wav")
-            sent = await callback.message.answer_voice(
-                voice_file,
-                caption=persona_display,
-                reply_markup=get_flow_voice_keyboard(0)  # placeholder id
+        # Приветствие — текст для PenFriend, голос для Flow
+        if active_mode == MODE_PENFRIEND:
+            safe_greeting = html.escape(greeting)
+            sent = await callback.message.answer(
+                f"💬 {safe_greeting}",
+                parse_mode="HTML",
+                reply_markup=get_translate_keyboard(0)
             )
-            # Обновляем keyboard с реальным message_id
             _originals_cache.set(sent.message_id, greeting)
-            await sent.edit_reply_markup(
-                reply_markup=get_flow_voice_keyboard(sent.message_id)
-            )
+            await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
+        else:
+            voice_bytes = await groq_client.text_to_speech(greeting, voice=voice)
+            if voice_bytes:
+                voice_file = BufferedInputFile(voice_bytes, filename="greeting.wav")
+                sent = await callback.message.answer_voice(
+                    voice_file,
+                    caption=persona_display,
+                    reply_markup=get_flow_voice_keyboard(0)
+                )
+                _originals_cache.set(sent.message_id, greeting)
+                await sent.edit_reply_markup(
+                    reply_markup=get_flow_voice_keyboard(sent.message_id)
+                )
 
         await callback.answer()
 
