@@ -7,7 +7,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from src.bot.handlers.message import FlowState
+from src.bot.handlers.states import FlowState
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from src.bot.keyboards import (
