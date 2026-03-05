@@ -23,7 +23,6 @@ def get_persona_keyboard() -> InlineKeyboardMarkup:
     personas = get_all_personas()
     for key, name in personas.items():
         builder.row(InlineKeyboardButton(text=name, callback_data=f"persona_{key}"))
-    builder.row(InlineKeyboardButton(text="← Back", callback_data="settings"))
     return builder.as_markup()
 
 
