@@ -206,7 +206,9 @@ async def run_merge_summaries(user_id: int) -> None:
 
 @router.message(F.text == "🎙 Flow")
 async def activate_flow(message: Message, state: FSMContext):
+    await db.update_mode(message.from_user.id, MODE_FLOW)
     await state.set_state(FlowState.choosing_persona)
+    await state.update_data(active_mode=MODE_FLOW)
     await message.answer(
         "Who would you like to talk to?",
         reply_markup=get_persona_keyboard()
@@ -241,8 +243,9 @@ async def deactivate_tutor(message: Message, state: FSMContext):
 
 @router.message(F.text == "✉️ PenFriend")
 async def activate_penfriend(message: Message, state: FSMContext):
-    await state.set_state(FlowState.choosing_persona)
     await db.update_mode(message.from_user.id, MODE_PENFRIEND)
+    await state.set_state(FlowState.choosing_persona)
+    await state.update_data(active_mode=MODE_PENFRIEND)
     await message.answer(
         "✉️ <b>PenFriend Mode</b>\n\nWho would you like to write to?",
         parse_mode="HTML",
@@ -289,6 +292,7 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
 
         fsm_data = await state.get_data()
         switch_context = fsm_data.get("switch_context", "")
+        active_mode = fsm_data.get("active_mode", MODE_FLOW)
         user = await db.get_or_create_user(user_id)
 
         await db.update_user_persona(user_id, persona_key)
@@ -298,7 +302,7 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
             persona_key=persona_key,
             voice=voice,
             switch_context="",
-            active_mode=user.get("mode", MODE_FLOW)
+            active_mode=active_mode
         )
         await state.set_state(FlowState.active)
 
@@ -326,8 +330,10 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
         persona_display = get_persona_display(persona_key)
         if switch_context:
             await callback.message.answer(f"↩ Switched to {persona_display}", parse_mode="HTML")
+        elif active_mode == MODE_PENFRIEND:
+            await callback.message.answer(f"✉️ PenFriend Mode — {persona_display}", parse_mode="HTML", reply_markup=get_penfriend_keyboard())
         else:
-            await callback.message.answer(f"🎙 Flow Mode — {persona_display}", parse_mode="HTML")
+            await callback.message.answer(f"🎙 Flow Mode — {persona_display}", parse_mode="HTML", reply_markup=get_flow_stop_keyboard())
 
         # Приветствие — голос с caption (имя персонажа)
         voice_bytes = await groq_client.text_to_speech(greeting, voice=voice)
