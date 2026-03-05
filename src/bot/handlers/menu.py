@@ -6,13 +6,10 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from src.bot.handlers.states import FlowState
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from src.bot.keyboards import (
     get_level_keyboard,
-    get_persona_keyboard,
     get_translate_keyboard,
     get_original_keyboard,
     get_settings_keyboard,
@@ -264,57 +261,6 @@ async def change_user_level(callback: CallbackQuery):
         parse_mode="HTML"
     )
     await callback.answer()
-
-
-@router.callback_query(F.data == "change_persona")
-async def change_persona(callback: CallbackQuery, state: FSMContext):
-    await state.update_data(from_settings=True)
-    await state.set_state(FlowState.choosing_persona)
-    await callback.message.edit_text(
-        "<b>Who would you like to talk to?</b>",
-        reply_markup=get_persona_keyboard(),
-        parse_mode="HTML"
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("persona_"), FlowState.choosing_persona)
-async def menu_persona_selected(callback: CallbackQuery, state: FSMContext):
-    """Перехватывает persona_* когда пришли из Settings (from_settings=True)"""
-    try:
-        fsm_data = await state.get_data()
-        if not fsm_data.get("from_settings"):
-            return  # отдаём управление flow_persona_selected в message.py
-
-        from src.personas import get_all_personas, get_persona_display
-        from src.services.supabase_db import db as _db
-        persona_key = callback.data.split("_", 1)[1]
-        personas = get_all_personas()
-        if persona_key not in personas:
-            await callback.answer("Unknown persona.", show_alert=True)
-            return
-
-        user_id = callback.from_user.id
-        from src.personas import get_persona_voice
-        voice = get_persona_voice(persona_key)
-        await _db.update_user_persona(user_id, persona_key)
-        await _db.update_user_voice(user_id, voice)
-
-        display_name = get_persona_display(persona_key)
-        await state.clear()
-
-        user = await _db.get_or_create_user(user_id)
-        notif = user.get("notifications_enabled", True)
-        await callback.message.edit_text(
-            f"👤 Now talking to {display_name}\n\n⚙️ <b>Settings</b>",
-            parse_mode="HTML",
-            reply_markup=get_settings_keyboard(notif)
-        )
-        await callback.answer()
-    except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f"Error in menu_persona_selected: {e}")
-        await callback.answer("Something went wrong.", show_alert=True)
 
 
 @router.callback_query(F.data == "back_to_menu")

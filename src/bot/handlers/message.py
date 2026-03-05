@@ -36,8 +36,40 @@ from src.modes import (
 router = Router()
 logger = logging.getLogger(__name__)
 
-# Кеш оригинальных текстов для кнопки Original: {message_id: original_text}
-_originals_cache: Dict[int, str] = {}
+import time as _time
+
+# Кеш оригинальных текстов для кнопки Original: {message_id: (text, timestamp)}
+# TTL = 2 часа — сообщения старше этого времени из кэша вычищаются
+_CACHE_TTL = 7200  # секунд
+
+class _TTLCache:
+    def __init__(self, ttl: int):
+        self._ttl = ttl
+        self._data: Dict[int, tuple] = {}  # {key: (value, timestamp)}
+
+    def set(self, key: int, value: str) -> None:
+        self._data[key] = (value, _time.monotonic())
+        self._maybe_evict()
+
+    def get(self, key: int) -> str | None:
+        entry = self._data.get(key)
+        if entry is None:
+            return None
+        value, ts = entry
+        if _time.monotonic() - ts > self._ttl:
+            del self._data[key]
+            return None
+        return value
+
+    def _maybe_evict(self) -> None:
+        """Вычищаем протухшие записи раз в ~100 новых записей"""
+        if len(self._data) % 100 == 0:
+            now = _time.monotonic()
+            expired = [k for k, (_, ts) in self._data.items() if now - ts > self._ttl]
+            for k in expired:
+                del self._data[k]
+
+_originals_cache = _TTLCache(_CACHE_TTL)
 
 # Порог схлопывания саммари
 SUMMARY_MERGE_THRESHOLD = 4
@@ -97,7 +129,7 @@ async def send_response_with_translate(
         text_body = f"{text_body}\n\n{analysis_text}"
 
     sent = await message.answer(text_body, parse_mode="HTML")
-    _originals_cache[sent.message_id] = chat_response
+    _originals_cache.set(sent.message_id, chat_response)
 
     if extra_keyboard:
         from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -257,27 +289,10 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
 
         fsm_data = await state.get_data()
         switch_context = fsm_data.get("switch_context", "")
-        from_settings = fsm_data.get("from_settings", False)
         user = await db.get_or_create_user(user_id)
 
         await db.update_user_persona(user_id, persona_key)
         await db.update_user_voice(user_id, voice)
-
-        # Смена персонажа из Settings — просто сохраняем и возвращаем в настройки
-        if from_settings:
-            from src.personas import get_all_personas
-            display_name = get_persona_display(persona_key)
-            await state.clear()
-            from src.bot.keyboards import get_settings_keyboard
-            user = await db.get_or_create_user(user_id)
-            notif = user.get("notifications_enabled", True)
-            await callback.message.edit_text(
-                f"👤 Now talking to {display_name}.\n\n⚙️ <b>Settings</b>",
-                parse_mode="HTML",
-                reply_markup=get_settings_keyboard(notif)
-            )
-            await callback.answer()
-            return
 
         await state.update_data(
             persona_key=persona_key,
@@ -324,7 +339,7 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
                 reply_markup=get_flow_voice_keyboard(0)  # placeholder id
             )
             # Обновляем keyboard с реальным message_id
-            _originals_cache[sent.message_id] = greeting
+            _originals_cache.set(sent.message_id, greeting)
             await sent.edit_reply_markup(
                 reply_markup=get_flow_voice_keyboard(sent.message_id)
             )
@@ -406,7 +421,7 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             await asyncio.sleep(delay)
             safe_response = html.escape(chat_response)
             sent = await message.answer(f"💬 {safe_response}", parse_mode="HTML")
-            _originals_cache[sent.message_id] = chat_response
+            _originals_cache.set(sent.message_id, chat_response)
             await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
         else:
             # Flow Mode — голос с caption и кнопками Text / Translate
@@ -418,7 +433,7 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
                     caption=persona_display,
                     reply_markup=get_flow_voice_keyboard(0)
                 )
-                _originals_cache[sent.message_id] = chat_response
+                _originals_cache.set(sent.message_id, chat_response)
                 await sent.edit_reply_markup(
                     reply_markup=get_flow_voice_keyboard(sent.message_id)
                 )
@@ -557,7 +572,7 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
         # Текстовый ответ с кнопкой Translate
         safe_response = html.escape(chat_response)
         sent = await message.answer(f"💬 {safe_response}", parse_mode="HTML")
-        _originals_cache[sent.message_id] = chat_response
+        _originals_cache.set(sent.message_id, chat_response)
         await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
 
         if is_farewell:
