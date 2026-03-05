@@ -5,6 +5,7 @@ from aiogram import Router, F
 from aiogram.types import Message, BufferedInputFile, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from src.bot.handlers.states import FlowState
 from typing import Dict, Any
 
 from src.config import settings, ADMIN_IDS
@@ -54,12 +55,6 @@ def _penfriend_typing_delay(text: str) -> float:
     seconds = (words / 55) * 60 * 0.7
     return max(1.4, min(seconds, 6.3))
 
-
-# ─── FSM ───────────────────────────────────────────────────────────────────
-
-class FlowState(StatesGroup):
-    choosing_persona = State()
-    active = State()
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────────
