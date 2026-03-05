@@ -7,6 +7,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from src.bot.handlers.message import FlowState
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from src.bot.keyboards import (
@@ -267,7 +268,6 @@ async def change_user_level(callback: CallbackQuery):
 
 @router.callback_query(F.data == "change_persona")
 async def change_persona(callback: CallbackQuery, state: FSMContext):
-    from src.bot.handlers.message import FlowState
     await state.update_data(from_settings=True)
     await state.set_state(FlowState.choosing_persona)
     await callback.message.edit_text(
