@@ -178,6 +178,63 @@ class SupabaseDB:
             logger.error(f"Error updating correction rate: {e}")
             return False
 
+    # ─── Голосовой триал (Free tier) ───────────────────────────────────────
+
+    FREE_VOICE_EXCHANGES = 2  # обменов (пользователь + персонаж = 1 обмен)
+
+    async def get_voice_trial(self, telegram_id: int) -> Dict[str, Any]:
+        """
+        Возвращает текущее состояние голосового триала.
+        Автоматически сбрасывает счётчик если наступил новый день (UTC).
+        Возвращает: {used: int, exhausted: bool}
+        """
+        try:
+            user = await self.get_or_create_user(telegram_id)
+            today = datetime.now(timezone.utc).date().isoformat()
+            reset_date = user.get("voice_trials_reset_date")
+            used = user.get("voice_trials_used", 0)
+
+            # Сброс если новый день
+            if reset_date != today:
+                self.client.table("users").update({
+                    "voice_trials_used": 0,
+                    "voice_trials_reset_date": today
+                }).eq("telegram_id", telegram_id).execute()
+                used = 0
+
+            return {
+                "used": used,
+                "exhausted": used >= self.FREE_VOICE_EXCHANGES
+            }
+        except Exception as e:
+            logger.error(f"Error getting voice trial: {e}")
+            return {"used": 0, "exhausted": False}
+
+    async def increment_voice_trial(self, telegram_id: int) -> int:
+        """
+        Увеличивает счётчик использованных голосовых обменов.
+        Возвращает новое значение.
+        """
+        try:
+            user = await self.get_or_create_user(telegram_id)
+            today = datetime.now(timezone.utc).date().isoformat()
+            reset_date = user.get("voice_trials_reset_date")
+            current = user.get("voice_trials_used", 0)
+
+            # Если новый день — начинаем с нуля
+            if reset_date != today:
+                current = 0
+
+            new_val = current + 1
+            self.client.table("users").update({
+                "voice_trials_used": new_val,
+                "voice_trials_reset_date": today
+            }).eq("telegram_id", telegram_id).execute()
+            return new_val
+        except Exception as e:
+            logger.error(f"Error incrementing voice trial: {e}")
+            return 0
+
     # ─── Словарь ───────────────────────────────────────────────────────────
 
     async def add_to_vocabulary(self, telegram_id: int, word_data: Dict[str, Any]) -> bool:
