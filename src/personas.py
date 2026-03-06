@@ -209,8 +209,112 @@ You know that confidence comes before perfection.
     }
 }
 
+# ─── Отмазки персонажей когда голосовые недоступны ────────────────────────
+# Используются в двух случаях:
+# 1. Триал исчерпан — персонаж объясняет почему не может говорить
+# 2. Последний голосовой обмен — персонаж предупреждает заранее
 
-def get_persona(name: str) -> Dict[str, Any]:
+VOICE_EXCUSES = {
+    "greg": {
+        "excuse": (
+            "Hey, I'm in the middle of rounds right now — got an attending basically breathing down my neck. "
+            "Can't talk, but I can text between patients. What's up?"
+        ),
+        "last_exchange": (
+            "# IMPORTANT: This is your last voice message today. "
+            "After your response, naturally mention that you're about to go back to rounds / "
+            "your attending just called you / you're stepping into a patient room — "
+            "so you'll have to switch to texting for the rest of the day. "
+            "Suggest continuing in PenFriend or Tutor mode. Stay fully in character."
+        ),
+    },
+    "mark": {
+        "excuse": (
+            "In the middle of service right now. Can't talk — it's loud as hell back here. "
+            "Text me, I'll answer between tickets."
+        ),
+        "last_exchange": (
+            "# IMPORTANT: This is your last voice message today. "
+            "After your response, naturally mention that service is picking up / "
+            "your sous chef needs you / the pass is getting slammed — "
+            "so you'll be on text only for a while. "
+            "Suggest continuing in PenFriend or Tutor mode. Stay fully in character."
+        ),
+    },
+    "junior": {
+        "excuse": (
+            "Okay so Leo and Nico literally just fell asleep like two minutes ago. "
+            "I cannot make a single sound or it's over. Text only, please."
+        ),
+        "last_exchange": (
+            "# IMPORTANT: This is your last voice message today. "
+            "After your response, naturally mention that the twins are about to nap / "
+            "Jane just got them down / you need to go silent mode — "
+            "so voice is off for now, but you're still here over text. "
+            "Suggest continuing in PenFriend or Tutor mode. Stay fully in character."
+        ),
+    },
+    "mrs_smith": {
+        "excuse": (
+            "I'm sitting with my class right now — they're in the middle of a test. "
+            "I can't speak, but I can write. What did you want to say?"
+        ),
+        "last_exchange": (
+            "# IMPORTANT: This is your last voice message today. "
+            "After your response, naturally mention that your next class is starting / "
+            "you're about to hand out a test / the bell is about to ring — "
+            "so you'll need to go quiet and switch to writing. "
+            "Suggest continuing in PenFriend or Tutor mode. Stay fully in character."
+        ),
+    },
+    "summer": {
+        "excuse": (
+            "Just boarded — airplane mode in like two minutes and it's way too loud to talk anyway. "
+            "Text me though, I'll answer when I land."
+        ),
+        "last_exchange": (
+            "# IMPORTANT: This is your last voice message today. "
+            "After your response, naturally mention that you're about to board / "
+            "you're in the middle of a yoga class / the signal is terrible here — "
+            "so voice won't work, but texts are fine. "
+            "Suggest continuing in PenFriend or Tutor mode. Stay fully in character."
+        ),
+    },
+    "jane": {
+        "excuse": (
+            "Oh my god, both boys are finally asleep. I literally cannot make a sound. "
+            "Text me — I'm here, just in full stealth mode."
+        ),
+        "last_exchange": (
+            "# IMPORTANT: This is your last voice message today. "
+            "After your response, naturally mention that Nico is starting to stir / "
+            "you hear Leo on the monitor / nap time is basically a ticking clock — "
+            "so you're going silent and switching to texts. "
+            "Suggest continuing in PenFriend or Tutor mode. Stay fully in character."
+        ),
+    },
+}
+
+VOICE_EXCUSES_DEFAULT = {
+    "excuse": "Can't talk right now — text me instead.",
+    "last_exchange": (
+        "# IMPORTANT: This is your last voice message today. "
+        "Naturally wrap up the voice part of your conversation and suggest continuing over text. "
+        "Suggest PenFriend or Tutor mode. Stay fully in character."
+    ),
+}
+
+
+def get_voice_excuse(persona_key: str) -> str:
+    """Возвращает текст отмазки для исчерпанного триала."""
+    data = VOICE_EXCUSES.get(persona_key, VOICE_EXCUSES_DEFAULT)
+    return data["excuse"]
+
+
+def get_last_exchange_instruction(persona_key: str) -> str:
+    """Возвращает инструкцию для последнего голосового обмена."""
+    data = VOICE_EXCUSES.get(persona_key, VOICE_EXCUSES_DEFAULT)
+    return data["last_exchange"]
     """Возвращает персонажа по имени (регистронезависимо)"""
     return PERSONAS.get(name.lower(), PERSONAS["greg"])
 
