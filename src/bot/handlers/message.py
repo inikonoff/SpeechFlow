@@ -346,18 +346,38 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
             _originals_cache.set(sent.message_id, greeting)
             await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
         else:
-            voice_bytes = await groq_client.text_to_speech(greeting, voice=voice)
-            if voice_bytes:
-                voice_file = BufferedInputFile(voice_bytes, filename="greeting.wav")
-                sent = await callback.message.answer_voice(
-                    voice_file,
-                    caption=persona_display,
-                    reply_markup=get_flow_voice_keyboard(0)
+            # Flow — проверяем голосовой триал
+            trial = await db.get_voice_trial(user_id)
+            if trial["exhausted"]:
+                # Триал исчерпан — отправляем текст, информируем
+                safe_greeting = html.escape(greeting)
+                sent = await callback.message.answer(
+                    f"💬 {safe_greeting}",
+                    parse_mode="HTML",
+                    reply_markup=get_translate_keyboard(0)
                 )
                 _originals_cache.set(sent.message_id, greeting)
-                await sent.edit_reply_markup(
-                    reply_markup=get_flow_voice_keyboard(sent.message_id)
+                await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
+                await callback.message.answer(
+                    "🎙 На бесплатном плане доступно 2 голосовых обмена в день.\n"
+                    "Flow продолжается в текстовом режиме.\n\n"
+                    "Чтобы разблокировать голос — оформите подписку. *(скоро)*",
+                    parse_mode="Markdown"
                 )
+            else:
+                await db.increment_voice_trial(user_id)
+                voice_bytes = await groq_client.text_to_speech(greeting, voice=voice)
+                if voice_bytes:
+                    voice_file = BufferedInputFile(voice_bytes, filename="greeting.wav")
+                    sent = await callback.message.answer_voice(
+                        voice_file,
+                        caption=persona_display,
+                        reply_markup=get_flow_voice_keyboard(0)
+                    )
+                    _originals_cache.set(sent.message_id, greeting)
+                    await sent.edit_reply_markup(
+                        reply_markup=get_flow_voice_keyboard(sent.message_id)
+                    )
 
         await callback.answer()
 
@@ -390,6 +410,16 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             return
 
         if message.voice:
+            # Проверяем триал перед транскрипцией
+            trial = await db.get_voice_trial(user_id)
+            if trial["exhausted"]:
+                await message.answer(
+                    "🎙 На бесплатном плане доступно 2 голосовых обмена в день.\n"
+                    "Попробуйте написать текстом — Flow продолжается.\n\n"
+                    "Чтобы разблокировать голос — оформите подписку. *(скоро)*",
+                    parse_mode="Markdown"
+                )
+                return
             await message.bot.send_chat_action(user_id, "typing")
             voice_file = await message.bot.get_file(message.voice.file_id)
             voice_bytes = await message.bot.download_file(voice_file.file_path)
@@ -439,19 +469,28 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             _originals_cache.set(sent.message_id, chat_response)
             await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
         else:
-            # Flow Mode — голос с caption и кнопками Text / Translate
-            voice_bytes = await groq_client.text_to_speech(chat_response, voice=voice)
-            if voice_bytes:
-                voice_file = BufferedInputFile(voice_bytes, filename="response.wav")
-                sent = await message.answer_voice(
-                    voice_file,
-                    caption=persona_display,
-                    reply_markup=get_flow_voice_keyboard(0)
-                )
+            # Flow — проверяем триал для голоса персонажа
+            trial = await db.get_voice_trial(user_id)
+            if trial["exhausted"]:
+                # Отправляем текстом, один раз предупреждаем
+                safe_response = html.escape(chat_response)
+                sent = await message.answer(f"💬 {safe_response}", parse_mode="HTML")
                 _originals_cache.set(sent.message_id, chat_response)
-                await sent.edit_reply_markup(
-                    reply_markup=get_flow_voice_keyboard(sent.message_id)
-                )
+                await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
+            else:
+                await db.increment_voice_trial(user_id)
+                voice_bytes = await groq_client.text_to_speech(chat_response, voice=voice)
+                if voice_bytes:
+                    voice_file = BufferedInputFile(voice_bytes, filename="response.wav")
+                    sent = await message.answer_voice(
+                        voice_file,
+                        caption=persona_display,
+                        reply_markup=get_flow_voice_keyboard(0)
+                    )
+                    _originals_cache.set(sent.message_id, chat_response)
+                    await sent.edit_reply_markup(
+                        reply_markup=get_flow_voice_keyboard(sent.message_id)
+                    )
 
         # Если прощание — саммаризация в фоне + инкремент сессии
         if is_farewell:
