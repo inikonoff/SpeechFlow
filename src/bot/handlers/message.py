@@ -12,7 +12,10 @@ from src.config import settings, ADMIN_IDS
 from src.services.supabase_db import db
 from src.services.groq_client import groq_client
 from src.utils.audio import save_voice_file, cleanup_file, read_file_bytes
-from src.personas import get_persona_voice, get_persona_display, get_persona_tutor_prompt
+from src.personas import (
+    get_persona_voice, get_persona_display, get_persona_tutor_prompt,
+    get_voice_excuse, get_last_exchange_instruction
+)
 from src.bot.keyboards import (
     get_translate_keyboard,
     get_original_keyboard,
@@ -346,24 +349,18 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
             _originals_cache.set(sent.message_id, greeting)
             await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
         else:
-            # Flow — проверяем голосовой триал
-            trial = await db.get_voice_trial(user_id)
+            # Flow — проверяем голосовой триал (админ пропускает)
+            trial = {"exhausted": False} if user_id in ADMIN_IDS else await db.get_voice_trial(user_id)
             if trial["exhausted"]:
-                # Триал исчерпан — отправляем текст, информируем
-                safe_greeting = html.escape(greeting)
+                # Триал исчерпан — персонаж объясняет в своей вселенной
+                excuse = get_voice_excuse(persona_key)
                 sent = await callback.message.answer(
-                    f"💬 {safe_greeting}",
+                    f"💬 {html.escape(excuse)}",
                     parse_mode="HTML",
                     reply_markup=get_translate_keyboard(0)
                 )
-                _originals_cache.set(sent.message_id, greeting)
+                _originals_cache.set(sent.message_id, excuse)
                 await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
-                await callback.message.answer(
-                    "🎙 На бесплатном плане доступно 2 голосовых обмена в день.\n"
-                    "Flow продолжается в текстовом режиме.\n\n"
-                    "Чтобы разблокировать голос — оформите подписку. *(скоро)*",
-                    parse_mode="Markdown"
-                )
             else:
                 await db.increment_voice_trial(user_id)
                 voice_bytes = await groq_client.text_to_speech(greeting, voice=voice)
@@ -410,15 +407,18 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             return
 
         if message.voice:
-            # Проверяем триал перед транскрипцией
-            trial = await db.get_voice_trial(user_id)
+            # Проверяем триал перед транскрипцией (админ пропускает)
+            trial = {"exhausted": False} if user_id in ADMIN_IDS else await db.get_voice_trial(user_id)
             if trial["exhausted"]:
-                await message.answer(
-                    "🎙 На бесплатном плане доступно 2 голосовых обмена в день.\n"
-                    "Попробуйте написать текстом — Flow продолжается.\n\n"
-                    "Чтобы разблокировать голос — оформите подписку. *(скоро)*",
-                    parse_mode="Markdown"
+                # Не транскрибируем — персонаж сразу объясняет в своей вселенной
+                excuse = get_voice_excuse(persona_key)
+                sent = await message.answer(
+                    f"💬 {html.escape(excuse)}",
+                    parse_mode="HTML",
+                    reply_markup=get_translate_keyboard(0)
                 )
+                _originals_cache.set(sent.message_id, excuse)
+                await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
                 return
             await message.bot.send_chat_action(user_id, "typing")
             voice_file = await message.bot.get_file(message.voice.file_id)
@@ -446,6 +446,22 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             history_task, summary_task, farewell_task, errors_task
         )
 
+        # Определяем последний голосовой обмен — персонаж добавит прощание с голосом
+        trial_for_last = (
+            {"used": 0, "exhausted": False}
+            if user_id in ADMIN_IDS
+            else await db.get_voice_trial(user_id)
+        )
+        is_last_voice_exchange = (
+            active_mode not in (MODE_PENFRIEND,)
+            and not trial_for_last["exhausted"]
+            and trial_for_last["used"] + 1 >= db.FREE_VOICE_EXCHANGES
+        )
+        last_exchange_note = (
+            get_last_exchange_instruction(persona_key)
+            if is_last_voice_exchange else ""
+        )
+
         await message.bot.send_chat_action(user_id, "record_voice")
         chat_response = await groq_client.generate_flow_response(
             text=user_text,
@@ -453,7 +469,8 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             history=history,
             summary=summary,
             session_count=user.get("session_count", 0),
-            top_errors=top_errors
+            top_errors=top_errors,
+            extra_instruction=last_exchange_note
         )
         await db.save_message(user_id, "assistant", chat_response)
 
@@ -469,13 +486,17 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             _originals_cache.set(sent.message_id, chat_response)
             await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
         else:
-            # Flow — проверяем триал для голоса персонажа
-            trial = await db.get_voice_trial(user_id)
+            # Flow — проверяем триал для голоса персонажа (админ пропускает)
+            trial = {"exhausted": False} if user_id in ADMIN_IDS else await db.get_voice_trial(user_id)
             if trial["exhausted"]:
-                # Отправляем текстом, один раз предупреждаем
-                safe_response = html.escape(chat_response)
-                sent = await message.answer(f"💬 {safe_response}", parse_mode="HTML")
-                _originals_cache.set(sent.message_id, chat_response)
+                # Триал исчерпан — персонаж объясняет в своей вселенной, голос не нужен
+                excuse = get_voice_excuse(persona_key)
+                sent = await message.answer(
+                    f"💬 {html.escape(excuse)}",
+                    parse_mode="HTML",
+                    reply_markup=get_translate_keyboard(0)
+                )
+                _originals_cache.set(sent.message_id, excuse)
                 await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
             else:
                 await db.increment_voice_trial(user_id)
