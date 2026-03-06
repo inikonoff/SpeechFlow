@@ -223,7 +223,8 @@ User Level: {level}"""
         history: Optional[List[Dict[str, str]]] = None,
         summary: Optional[str] = None,
         session_count: int = 0,
-        top_errors: Optional[List[str]] = None
+        top_errors: Optional[List[str]] = None,
+        extra_instruction: str = ""
     ) -> str:
         persona_prompt = get_persona_prompt(persona_key, session_count=session_count)
 
@@ -241,6 +242,9 @@ User Level: {level}"""
                 f"Occasionally use correct examples of these naturally in your own speech — "
                 f"no need to draw attention, just model the right form casually."
             )
+
+        if extra_instruction:
+            persona_prompt += f"\n\n{extra_instruction}"
 
         messages = [{"role": "system", "content": persona_prompt}]
         if history:
