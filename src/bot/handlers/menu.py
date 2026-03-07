@@ -19,6 +19,9 @@ from src.bot.keyboards import (
     get_back_to_menu_keyboard,
     get_main_menu_keyboard,
     get_admin_panel_keyboard,
+    get_admin_stats_keyboard,
+    get_admin_users_keyboard,
+    get_admin_user_card_keyboard,
     get_stats_back_keyboard,
 )
 from src.personas import get_all_personas
@@ -107,7 +110,7 @@ async def cmd_settings(message: Message):
     await message.answer(
         "⚙️ <b>Settings</b>",
         parse_mode="HTML",
-        reply_markup=get_settings_keyboard(notif, message.from_user.id)
+        reply_markup=get_settings_keyboard(notif)
     )
 
 
@@ -282,7 +285,7 @@ async def show_settings(callback: CallbackQuery):
         await callback.message.edit_text(
             "⚙️ <b>Settings</b>",
             parse_mode="HTML",
-            reply_markup=get_settings_keyboard(notif, callback.from_user.id)
+            reply_markup=get_settings_keyboard(notif)
         )
         await callback.answer()
     except Exception as e:
@@ -302,7 +305,7 @@ async def toggle_notifications(callback: CallbackQuery):
         await callback.answer(f"Notifications {status}", show_alert=False)
 
         await callback.message.edit_reply_markup(
-            reply_markup=get_settings_keyboard(new_value, callback.from_user.id)
+            reply_markup=get_settings_keyboard(new_value)
         )
     except Exception as e:
         logger.error(f"Error toggling notifications: {e}")
@@ -361,7 +364,7 @@ async def menu_persona_selected(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(
             f"👤 Now talking to {display_name}\n\n⚙️ <b>Settings</b>",
             parse_mode="HTML",
-            reply_markup=get_settings_keyboard(notif, callback.from_user.id)
+            reply_markup=get_settings_keyboard(notif)
         )
         await callback.answer()
     except Exception as e:
@@ -388,13 +391,11 @@ async def back_to_menu(callback: CallbackQuery):
 
 def _admin_only(func):
     """Декоратор: отклоняет запрос если не админ."""
-    from functools import wraps
-    @wraps(func)
-    async def wrapper(callback: CallbackQuery, **kwargs):
+    async def wrapper(callback: CallbackQuery, *args, **kwargs):
         if callback.from_user.id not in ADMIN_IDS:
             await callback.answer("⛔ Нет доступа.", show_alert=True)
             return
-        return await func(callback, **kwargs)
+        return await func(callback, *args, **kwargs)
     return wrapper
 
 
@@ -418,21 +419,140 @@ async def show_admin_panel(callback: CallbackQuery):
 async def show_admin_stats(callback: CallbackQuery):
     try:
         stats = await db.get_admin_stats()
+
+        # Рейтинг режимов
+        mode_icons = {"tutor": "🎓", "penfriend": "✉️", "flow": "🎙"}
+        mode_lines = ""
+        for i, (mode, cnt) in enumerate(stats.get("mode_ranking", []), 1):
+            icon = mode_icons.get(mode, "•")
+            mode_lines += f"  {i}. {icon} {mode.capitalize()}: <b>{cnt}</b>\n"
+
+        # Топ персонажей
+        persona_icons = {
+            "greg": "🧑‍⚕️", "mark": "👨‍🍳", "junior": "👨‍💻",
+            "mrs_smith": "👩‍🏫", "summer": "🌍", "jane": "☕"
+        }
+        persona_lines = ""
+        for i, (persona, cnt) in enumerate(stats.get("top_personas", []), 1):
+            icon = persona_icons.get(persona, "👤")
+            name = persona.replace("_", " ").capitalize()
+            persona_lines += f"  {i}. {icon} {name}: <b>{cnt}</b>\n"
+
         text = (
-            "📊 <b>Статистика пользователей</b>\n\n"
+            "📊 <b>Статистика</b>\n\n"
             f"👥 Всего: <b>{stats['total']}</b>\n"
             f"🆕 Новых сегодня: <b>{stats['new_today']}</b>\n"
             f"📅 Новых за неделю: <b>{stats['new_week']}</b>\n"
-            f"🟢 Активных за неделю: <b>{stats['active_week']}</b>"
+            f"🟢 Активных за неделю: <b>{stats['active_week']}</b>\n\n"
+            f"🎭 <b>Топ персонажей</b>\n{persona_lines or '  —'}\n"
+            f"🗂 <b>Режимы</b>\n{mode_lines or '  —'}"
         )
         await callback.message.edit_text(
             text,
             parse_mode="HTML",
-            reply_markup=get_admin_panel_keyboard()
+            reply_markup=get_admin_stats_keyboard()
         )
         await callback.answer()
     except Exception as e:
         logger.error(f"Error in admin_stats: {e}")
+        await callback.answer("Error.", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_users")
+@_admin_only
+async def show_admin_users(callback: CallbackQuery):
+    try:
+        users = await db.get_all_users()
+        if not users:
+            await callback.message.edit_text(
+                "👥 Пользователей пока нет.",
+                reply_markup=get_admin_panel_keyboard()
+            )
+            await callback.answer()
+            return
+        await callback.message.edit_text(
+            f"👥 <b>Пользователи</b> ({len(users)})\n\nВыберите для просмотра карточки:",
+            parse_mode="HTML",
+            reply_markup=get_admin_users_keyboard(users)
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in admin_users: {e}")
+        await callback.answer("Error.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin_user_"))
+@_admin_only
+async def show_admin_user_card(callback: CallbackQuery):
+    try:
+        telegram_id = int(callback.data.split("_")[2])
+        card = await db.get_user_card(telegram_id)
+        if not card:
+            await callback.answer("Не удалось загрузить карточку.", show_alert=True)
+            return
+
+        user = card.get("user", {})
+        name = user.get("first_name") or "—"
+        username = f"@{user.get('username')}" if user.get("username") else "—"
+        level = str(user.get("level") or "—").upper()
+        mode = user.get("mode") or "—"
+        persona = (user.get("persona") or "—").replace("_", " ").capitalize()
+        streak = user.get("streak_days") or 0
+        sessions = user.get("session_count") or 0
+        voice_today = user.get("voice_trials_used") or 0
+
+        created = user.get("created_at", "")[:10] if user.get("created_at") else "—"
+        last_active = user.get("last_active", "")[:10] if user.get("last_active") else "—"
+
+        mode_icons = {"tutor": "🎓", "penfriend": "✉️", "flow": "🎙"}
+        mode_icon = mode_icons.get(mode, "")
+        persona_icons = {
+            "greg": "🧑‍⚕️", "mark": "👨‍🍳", "junior": "👨‍💻",
+            "mrs smith": "👩‍🏫", "summer": "🌍", "jane": "☕"
+        }
+        persona_icon = persona_icons.get(persona.lower(), "👤")
+
+        text = (
+            f"👤 <b>{html.escape(name)}</b> {html.escape(username)}\n"
+            f"🆔 <code>{telegram_id}</code>\n\n"
+            f"📚 Уровень: <b>{level}</b>\n"
+            f"🗂 Режим: {mode_icon} <b>{mode.capitalize()}</b>\n"
+            f"🎭 Персонаж: {persona_icon} <b>{persona}</b>\n\n"
+            f"📅 Зарегистрирован: <b>{created}</b>\n"
+            f"🕐 Последняя активность: <b>{last_active}</b>\n"
+            f"🔥 Streak: <b>{streak} дн.</b>\n"
+            f"🔁 Сессий: <b>{sessions}</b>\n\n"
+            f"💬 Сообщений всего: <b>{card['msgs_total']}</b>\n"
+            f"📈 За неделю: <b>{card['msgs_week']}</b>\n"
+            f"🎙 Голосовых сегодня: <b>{voice_today}</b>\n\n"
+            f"📖 Словарь: <b>{card['vocab_count']}</b> слов "
+            f"· <b>{card['mastered_count']}</b> освоено"
+        )
+
+        await callback.message.edit_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=get_admin_user_card_keyboard(telegram_id)
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in admin_user_card: {e}")
+        await callback.answer("Error.", show_alert=True)
+
+
+@router.callback_query(F.data == "back_to_settings")
+async def back_to_settings(callback: CallbackQuery):
+    try:
+        user = await db.get_or_create_user(callback.from_user.id)
+        notif = user.get("notifications_enabled", True)
+        await callback.message.edit_text(
+            "⚙️ <b>Settings</b>",
+            parse_mode="HTML",
+            reply_markup=get_settings_keyboard(notif, callback.from_user.id)
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in back_to_settings: {e}")
         await callback.answer("Error.", show_alert=True)
 
 
