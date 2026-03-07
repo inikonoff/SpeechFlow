@@ -36,8 +36,6 @@ def get_main_menu_keyboard(user_id: int = 0) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="📚 My Vocabulary", callback_data="my_vocabulary"),
     )
     builder.row(InlineKeyboardButton(text="⚙️ Settings", callback_data="settings"))
-    if user_id in ADMIN_IDS:
-        builder.row(InlineKeyboardButton(text="🔧 Админ-панель", callback_data="admin_panel"))
     return builder.as_markup()
 
 
@@ -59,12 +57,14 @@ def get_admin_panel_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def get_settings_keyboard(notifications_enabled: bool) -> InlineKeyboardMarkup:
+def get_settings_keyboard(notifications_enabled: bool, user_id: int = 0) -> InlineKeyboardMarkup:
     notif_text = "🔔 Notifications: ON" if notifications_enabled else "🔕 Notifications: OFF"
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text=notif_text,                  callback_data="toggle_notifications"))
     builder.row(InlineKeyboardButton(text="📊 Change Level",           callback_data="change_level"))
     builder.row(InlineKeyboardButton(text="✏️ Correction Sensitivity", callback_data="correction_rate"))
+    if user_id in ADMIN_IDS:
+        builder.row(InlineKeyboardButton(text="🔧 Админ-панель",       callback_data="admin_panel"))
     builder.row(InlineKeyboardButton(text="← Back",                    callback_data="back_to_menu"))
     return builder.as_markup()
 
