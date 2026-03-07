@@ -6,19 +6,25 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from src.bot.handlers.states import FlowState, AdminState
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from src.bot.keyboards import (
     get_level_keyboard,
+    get_persona_keyboard,
     get_translate_keyboard,
     get_original_keyboard,
     get_settings_keyboard,
     get_back_to_menu_keyboard,
     get_main_menu_keyboard,
+    get_admin_panel_keyboard,
+    get_stats_back_keyboard,
 )
 from src.personas import get_all_personas
 from src.services.supabase_db import db
 from src.services.groq_client import groq_client
+from src.config import ADMIN_IDS
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -117,57 +123,109 @@ async def cmd_author(message: Message):
 
 # ─── Stats & Vocabulary helpers ────────────────────────────────────────────
 
-async def _send_stats(user_id: int, send_fn):
+# ─── Stats cache (quick in-memory, per user_id) ───────────────────────────
+_stats_cache: Dict[int, dict] = {}  # user_id → stats dict
+
+
+def _build_quick_stats(stats: dict) -> str:
+    user = stats.get("user", {})
+    level = str(user.get("level", "Not set")).upper()
+    streak = user.get("streak_days", 0)
+    persona = user.get("persona", "greg").capitalize()
+    vocab_count = stats.get("vocabulary_count", 0)
+    mastered = stats.get("mastered_count", 0)
+    msgs_this = stats.get("msgs_this_week", 0)
+    msgs_prev = stats.get("msgs_prev_week", 0)
+    error_week = stats.get("error_stats_week", {})
+    error_prev = stats.get("error_stats_prev_week", {})
+
+    # Streak label
+    if streak == 0:
+        streak_line = "• Streak: just getting started 🌱"
+    elif streak == 1:
+        streak_line = "• Streak: <b>1 day</b> — good start 🔥"
+    elif streak < 7:
+        streak_line = f"• Streak: <b>{streak} days</b> 🔥"
+    else:
+        streak_line = f"• Streak: <b>{streak} days</b> 🔥🔥"
+
+    activity_line = f"• Messages this week: <b>{msgs_this}</b>"
+    if msgs_prev > 0:
+        arrow = trend_arrow(msgs_this, msgs_prev).strip()
+        activity_line += f"  <i>({arrow or '→'} vs last week)</i>"
+
+    vocab_line = f"• Vocabulary: <b>{vocab_count}</b> words"
+    if mastered > 0:
+        pct = int(mastered / vocab_count * 100) if vocab_count else 0
+        vocab_line += f" · <b>{mastered}</b> mastered ({pct}%) ✅"
+
+    text = (
+        f"📊 <b>Your Speech Flow Stats</b>\n\n"
+        f"👤 <b>Profile</b>\n"
+        f"• Level: <b>{level}</b>\n"
+        f"• Partner: <b>{persona}</b>\n"
+        f"{streak_line}\n\n"
+        f"📈 <b>This week</b>\n"
+        f"{activity_line}\n"
+        f"{vocab_line}\n\n"
+        f"🎯 <b>Errors this week</b>\n"
+    )
+
+    all_categories = set(list(error_week.keys()) + list(error_prev.keys()))
+    if all_categories:
+        for cat in sorted(all_categories):
+            cur = error_week.get(cat, 0)
+            prev = error_prev.get(cat, 0)
+            arrow = trend_arrow(cur, prev)
+            cat_safe = html.escape(str(cat))
+            text += f"• {cat_safe}: <b>{cur}</b>{arrow}\n"
+        text += "\n<i>↓ = improving  ↑ = more errors  → = same</i>"
+    else:
+        text += "No errors logged yet — keep practicing!"
+
+    return text
+
+
+def get_stats_keyboard(message_id: int, mode: str = "quick") -> InlineKeyboardMarkup:
+    """mode: 'quick' или 'deep'"""
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    from aiogram.types import InlineKeyboardButton
+    builder = InlineKeyboardBuilder()
+    if mode == "quick":
+        builder.row(InlineKeyboardButton(
+            text="📖 Deep Dive",
+            callback_data=f"stats_deep_{message_id}"
+        ))
+    else:
+        builder.row(InlineKeyboardButton(
+            text="📊 Quick Stats",
+            callback_data=f"stats_quick_{message_id}"
+        ))
+    builder.row(InlineKeyboardButton(
+        text="🌐 Translate",
+        callback_data=f"stats_translate_{message_id}_{mode}"
+    ))
+    return builder.as_markup()
+
+
+async def _send_stats(user_id: int, send_fn, edit_msg=None):
     try:
         stats = await db.get_user_stats(user_id)
-        user = stats.get("user", {})
+        _stats_cache[user_id] = stats
+        text = _build_quick_stats(stats)
 
-        level = str(user.get('level', 'Not set')).upper()
-        streak = user.get('streak_days', 0)
-        persona = user.get('persona', 'greg').capitalize()
-        vocab_count = stats.get("vocabulary_count", 0)
-        mastered = stats.get("mastered_count", 0)
-        msgs_this = stats.get("msgs_this_week", 0)
-        msgs_prev = stats.get("msgs_prev_week", 0)
-        error_week = stats.get("error_stats_week", {})
-        error_prev = stats.get("error_stats_prev_week", {})
-
-        activity_line = f"• Messages this week: <b>{msgs_this}</b>"
-        if msgs_prev > 0:
-            activity_line += f"  <i>({trend_arrow(msgs_this, msgs_prev).strip() or '→'} vs last week)</i>"
-
-        vocab_line = f"• Vocabulary: <b>{vocab_count}</b> words"
-        if mastered > 0:
-            vocab_line += f", <b>{mastered}</b> mastered ✅"
-
-        stats_text = (
-            f"📊 <b>Your Speech Flow Stats</b>\n\n"
-            f"👤 <b>Profile</b>\n"
-            f"• Level: <b>{level}</b>\n"
-            f"• Partner: <b>{persona}</b>\n"
-            f"• Streak: <b>{streak} days</b>\n\n"
-            f"📈 <b>This week</b>\n"
-            f"{activity_line}\n"
-            f"{vocab_line}\n\n"
-            f"🎯 <b>Errors this week</b>\n"
-        )
-
-        all_categories = set(list(error_week.keys()) + list(error_prev.keys()))
-        if all_categories:
-            for cat in sorted(all_categories):
-                cur = error_week.get(cat, 0)
-                prev = error_prev.get(cat, 0)
-                arrow = trend_arrow(cur, prev)
-                cat_safe = html.escape(str(cat))
-                stats_text += f"• {cat_safe}: <b>{cur}</b>{arrow}\n"
-            stats_text += "\n<i>↓ = improving, ↑ = more errors, → = same</i>"
+        if edit_msg:
+            sent = await edit_msg(text, parse_mode="HTML", reply_markup=None)
         else:
-            stats_text += "No errors logged yet. Keep practicing!"
+            sent = await send_fn(text, parse_mode="HTML")
 
-        await send_fn(stats_text, parse_mode="HTML")
+        await sent.edit_reply_markup(reply_markup=get_stats_keyboard(sent.message_id, "quick"))
     except Exception as e:
         logger.error(f"Error in stats: {e}")
-        await send_fn("Error loading stats.", parse_mode="HTML")
+        if edit_msg:
+            await edit_msg("Error loading stats.", parse_mode="HTML")
+        else:
+            await send_fn("Error loading stats.", parse_mode="HTML")
 
 
 async def _send_vocabulary(user_id: int, send_fn):
@@ -263,18 +321,172 @@ async def change_user_level(callback: CallbackQuery):
     await callback.answer()
 
 
+@router.callback_query(F.data == "change_persona")
+async def change_persona(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(from_settings=True)
+    await state.set_state(FlowState.choosing_persona)
+    await callback.message.edit_text(
+        "<b>Who would you like to talk to?</b>",
+        reply_markup=get_persona_keyboard(),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("persona_"), FlowState.choosing_persona)
+async def menu_persona_selected(callback: CallbackQuery, state: FSMContext):
+    """Перехватывает persona_* когда пришли из Settings (from_settings=True)"""
+    try:
+        fsm_data = await state.get_data()
+        if not fsm_data.get("from_settings"):
+            return  # отдаём управление flow_persona_selected в message.py
+
+        from src.personas import get_all_personas, get_persona_display
+        from src.services.supabase_db import db as _db
+        persona_key = callback.data.split("_", 1)[1]
+        personas = get_all_personas()
+        if persona_key not in personas:
+            await callback.answer("Unknown persona.", show_alert=True)
+            return
+
+        user_id = callback.from_user.id
+        from src.personas import get_persona_voice
+        voice = get_persona_voice(persona_key)
+        await _db.update_user_persona(user_id, persona_key)
+        await _db.update_user_voice(user_id, voice)
+
+        display_name = get_persona_display(persona_key)
+        await state.clear()
+
+        user = await _db.get_or_create_user(user_id)
+        notif = user.get("notifications_enabled", True)
+        await callback.message.edit_text(
+            f"👤 Now talking to {display_name}\n\n⚙️ <b>Settings</b>",
+            parse_mode="HTML",
+            reply_markup=get_settings_keyboard(notif)
+        )
+        await callback.answer()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Error in menu_persona_selected: {e}")
+        await callback.answer("Something went wrong.", show_alert=True)
+
+
 @router.callback_query(F.data == "back_to_menu")
 async def back_to_menu(callback: CallbackQuery):
     try:
         await callback.message.edit_text(
             "🏠 <b>Main Menu</b>",
             parse_mode="HTML",
-            reply_markup=get_main_menu_keyboard()
+            reply_markup=get_main_menu_keyboard(callback.from_user.id)
         )
         await callback.answer()
     except Exception as e:
         logger.error(f"Error in back_to_menu: {e}")
         await callback.answer("Error.", show_alert=True)
+
+
+# ─── Админ-панель ──────────────────────────────────────────────────────────
+
+def _admin_only(func):
+    """Декоратор: отклоняет запрос если не админ."""
+    async def wrapper(callback: CallbackQuery, *args, **kwargs):
+        if callback.from_user.id not in ADMIN_IDS:
+            await callback.answer("⛔ Нет доступа.", show_alert=True)
+            return
+        return await func(callback, *args, **kwargs)
+    return wrapper
+
+
+@router.callback_query(F.data == "admin_panel")
+@_admin_only
+async def show_admin_panel(callback: CallbackQuery):
+    try:
+        await callback.message.edit_text(
+            "🔧 <b>Админ-панель</b>\n\nВыберите действие:",
+            parse_mode="HTML",
+            reply_markup=get_admin_panel_keyboard()
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in admin_panel: {e}")
+        await callback.answer("Error.", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_stats")
+@_admin_only
+async def show_admin_stats(callback: CallbackQuery):
+    try:
+        stats = await db.get_admin_stats()
+        text = (
+            "📊 <b>Статистика пользователей</b>\n\n"
+            f"👥 Всего: <b>{stats['total']}</b>\n"
+            f"🆕 Новых сегодня: <b>{stats['new_today']}</b>\n"
+            f"📅 Новых за неделю: <b>{stats['new_week']}</b>\n"
+            f"🟢 Активных за неделю: <b>{stats['active_week']}</b>"
+        )
+        await callback.message.edit_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=get_admin_panel_keyboard()
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in admin_stats: {e}")
+        await callback.answer("Error.", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_broadcast")
+@_admin_only
+async def start_broadcast(callback: CallbackQuery, state: FSMContext):
+    try:
+        await state.set_state(AdminState.waiting_broadcast)
+        await callback.message.edit_text(
+            "📣 <b>Broadcast</b>\n\n"
+            "Напишите сообщение — оно будет отправлено всем пользователям.\n\n"
+            "<i>Для отмены напишите /cancel</i>",
+            parse_mode="HTML",
+            reply_markup=None
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in admin_broadcast: {e}")
+        await callback.answer("Error.", show_alert=True)
+
+
+@router.message(AdminState.waiting_broadcast)
+async def handle_broadcast_message(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    if message.text and message.text.strip() == "/cancel":
+        await state.clear()
+        await message.answer(
+            "🏠 <b>Main Menu</b>",
+            parse_mode="HTML",
+            reply_markup=get_main_menu_keyboard(message.from_user.id)
+        )
+        return
+
+    await state.clear()
+    user_ids = await db.get_all_user_ids()
+    text = message.text or message.caption or ""
+
+    sent_ok = 0
+    sent_fail = 0
+    for uid in user_ids:
+        try:
+            await message.bot.send_message(uid, text)
+            sent_ok += 1
+        except Exception:
+            sent_fail += 1
+
+    await message.answer(
+        f"📣 <b>Broadcast завершён</b>\n\n"
+        f"✅ Доставлено: <b>{sent_ok}</b>\n"
+        f"❌ Ошибок: <b>{sent_fail}</b>",
+        parse_mode="HTML",
+        reply_markup=get_admin_panel_keyboard()
+    )
 
 
 @router.callback_query(F.data == "correction_rate")
@@ -320,12 +532,105 @@ async def cq_show_stats(callback: CallbackQuery):
     try:
         await _send_stats(
             callback.from_user.id,
-            lambda text, **kwargs: callback.message.edit_text(text, **kwargs)
+            send_fn=callback.message.answer,
+            edit_msg=lambda text, **kw: callback.message.edit_text(text, **kw)
         )
         await callback.answer()
     except Exception as e:
         logger.error(f"Error in cq_show_stats: {e}")
         await callback.answer("Error loading stats.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("stats_deep_"))
+async def cq_stats_deep(callback: CallbackQuery):
+    try:
+        await callback.answer("Generating your report…")
+        user_id = callback.from_user.id
+        stats = _stats_cache.get(user_id) or await db.get_user_stats(user_id)
+        _stats_cache[user_id] = stats
+
+        deep_text = await groq_client.generate_stats_deep_dive(stats)
+        safe = html.escape(deep_text)
+        msg_id = callback.message.message_id
+
+        await callback.message.edit_text(
+            f"📖 <b>Your Progress Report</b>\n\n{safe}",
+            parse_mode="HTML",
+            reply_markup=get_stats_keyboard(msg_id, "deep")
+        )
+    except Exception as e:
+        logger.error(f"Error in stats_deep: {e}")
+        await callback.answer("Error generating report.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("stats_quick_"))
+async def cq_stats_quick(callback: CallbackQuery):
+    try:
+        user_id = callback.from_user.id
+        stats = _stats_cache.get(user_id) or await db.get_user_stats(user_id)
+        _stats_cache[user_id] = stats
+        text = _build_quick_stats(stats)
+        msg_id = callback.message.message_id
+
+        await callback.message.edit_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=get_stats_keyboard(msg_id, "quick")
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in stats_quick: {e}")
+        await callback.answer("Error.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("stats_translate_"))
+async def cq_stats_translate(callback: CallbackQuery):
+    try:
+        await callback.answer("Translating…")
+        parts = callback.data.split("_")
+        # format: stats_translate_{message_id}_{mode}
+        mode = parts[-1]
+        current_text = re.sub(r"<[^>]+>", "", callback.message.text or "")
+        translation = await groq_client.translate_text(current_text)
+        safe = html.escape(translation)
+        msg_id = callback.message.message_id
+
+        await callback.message.edit_text(
+            f"🌐 {safe}",
+            parse_mode="HTML",
+            reply_markup=get_stats_back_keyboard(msg_id, mode)
+        )
+    except Exception as e:
+        logger.error(f"Error in stats_translate: {e}")
+        await callback.answer("Translation failed.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("stats_original_"))
+async def cq_stats_original(callback: CallbackQuery):
+    try:
+        parts = callback.data.split("_")
+        mode = parts[-1]
+        user_id = callback.from_user.id
+        stats = _stats_cache.get(user_id) or await db.get_user_stats(user_id)
+        _stats_cache[user_id] = stats
+        msg_id = callback.message.message_id
+
+        if mode == "deep":
+            deep_text = await groq_client.generate_stats_deep_dive(stats)
+            safe = html.escape(deep_text)
+            text = f"📖 <b>Your Progress Report</b>\n\n{safe}"
+        else:
+            text = _build_quick_stats(stats)
+
+        await callback.message.edit_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=get_stats_keyboard(msg_id, mode)
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in stats_original: {e}")
+        await callback.answer("Error.", show_alert=True)
 
 
 @router.callback_query(F.data == "my_vocabulary")
