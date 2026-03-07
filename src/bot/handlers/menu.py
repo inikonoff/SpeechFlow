@@ -388,11 +388,13 @@ async def back_to_menu(callback: CallbackQuery):
 
 def _admin_only(func):
     """Декоратор: отклоняет запрос если не админ."""
-    async def wrapper(callback: CallbackQuery, *args, **kwargs):
+    from functools import wraps
+    @wraps(func)
+    async def wrapper(callback: CallbackQuery, **kwargs):
         if callback.from_user.id not in ADMIN_IDS:
             await callback.answer("⛔ Нет доступа.", show_alert=True)
             return
-        return await func(callback, *args, **kwargs)
+        return await func(callback, **kwargs)
     return wrapper
 
 
