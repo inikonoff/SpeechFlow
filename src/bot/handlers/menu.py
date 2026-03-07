@@ -107,7 +107,7 @@ async def cmd_settings(message: Message):
     await message.answer(
         "⚙️ <b>Settings</b>",
         parse_mode="HTML",
-        reply_markup=get_settings_keyboard(notif)
+        reply_markup=get_settings_keyboard(notif, message.from_user.id)
     )
 
 
@@ -282,7 +282,7 @@ async def show_settings(callback: CallbackQuery):
         await callback.message.edit_text(
             "⚙️ <b>Settings</b>",
             parse_mode="HTML",
-            reply_markup=get_settings_keyboard(notif)
+            reply_markup=get_settings_keyboard(notif, callback.from_user.id)
         )
         await callback.answer()
     except Exception as e:
@@ -302,7 +302,7 @@ async def toggle_notifications(callback: CallbackQuery):
         await callback.answer(f"Notifications {status}", show_alert=False)
 
         await callback.message.edit_reply_markup(
-            reply_markup=get_settings_keyboard(new_value)
+            reply_markup=get_settings_keyboard(new_value, callback.from_user.id)
         )
     except Exception as e:
         logger.error(f"Error toggling notifications: {e}")
@@ -361,7 +361,7 @@ async def menu_persona_selected(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(
             f"👤 Now talking to {display_name}\n\n⚙️ <b>Settings</b>",
             parse_mode="HTML",
-            reply_markup=get_settings_keyboard(notif)
+            reply_markup=get_settings_keyboard(notif, callback.from_user.id)
         )
         await callback.answer()
     except Exception as e:
