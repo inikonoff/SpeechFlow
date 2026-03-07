@@ -110,11 +110,10 @@ async def cmd_settings(message: Message):
     await message.answer(
         "⚙️ <b>Settings</b>",
         parse_mode="HTML",
-        reply_markup=get_settings_keyboard(notif)
+        reply_markup=get_settings_keyboard(notif, message.from_user.id)
     )
 
 
-@router.message(Command("author"))
 async def cmd_author(message: Message):
     await message.answer(
         "👨‍💻 <b>SpeechFlow AI</b>\n\n"
@@ -285,7 +284,7 @@ async def show_settings(callback: CallbackQuery):
         await callback.message.edit_text(
             "⚙️ <b>Settings</b>",
             parse_mode="HTML",
-            reply_markup=get_settings_keyboard(notif)
+            reply_markup=get_settings_keyboard(notif, callback.from_user.id)
         )
         await callback.answer()
     except Exception as e:
@@ -305,7 +304,7 @@ async def toggle_notifications(callback: CallbackQuery):
         await callback.answer(f"Notifications {status}", show_alert=False)
 
         await callback.message.edit_reply_markup(
-            reply_markup=get_settings_keyboard(new_value)
+            reply_markup=get_settings_keyboard(new_value, callback.from_user.id)
         )
     except Exception as e:
         logger.error(f"Error toggling notifications: {e}")
@@ -364,7 +363,7 @@ async def menu_persona_selected(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(
             f"👤 Now talking to {display_name}\n\n⚙️ <b>Settings</b>",
             parse_mode="HTML",
-            reply_markup=get_settings_keyboard(notif)
+            reply_markup=get_settings_keyboard(notif, callback.from_user.id)
         )
         await callback.answer()
     except Exception as e:
@@ -391,11 +390,13 @@ async def back_to_menu(callback: CallbackQuery):
 
 def _admin_only(func):
     """Декоратор: отклоняет запрос если не админ."""
-    async def wrapper(callback: CallbackQuery, *args, **kwargs):
+    from functools import wraps
+    @wraps(func)
+    async def wrapper(callback: CallbackQuery, **kwargs):
         if callback.from_user.id not in ADMIN_IDS:
             await callback.answer("⛔ Нет доступа.", show_alert=True)
             return
-        return await func(callback, *args, **kwargs)
+        return await func(callback, **kwargs)
     return wrapper
 
 
@@ -420,14 +421,12 @@ async def show_admin_stats(callback: CallbackQuery):
     try:
         stats = await db.get_admin_stats()
 
-        # Рейтинг режимов
         mode_icons = {"tutor": "🎓", "penfriend": "✉️", "flow": "🎙"}
         mode_lines = ""
         for i, (mode, cnt) in enumerate(stats.get("mode_ranking", []), 1):
             icon = mode_icons.get(mode, "•")
             mode_lines += f"  {i}. {icon} {mode.capitalize()}: <b>{cnt}</b>\n"
 
-        # Топ персонажей
         persona_icons = {
             "greg": "🧑‍⚕️", "mark": "👨‍🍳", "junior": "👨‍💻",
             "mrs_smith": "👩‍🏫", "summer": "🌍", "jane": "☕"
@@ -500,24 +499,21 @@ async def show_admin_user_card(callback: CallbackQuery):
         streak = user.get("streak_days") or 0
         sessions = user.get("session_count") or 0
         voice_today = user.get("voice_trials_used") or 0
-
-        created = user.get("created_at", "")[:10] if user.get("created_at") else "—"
-        last_active = user.get("last_active", "")[:10] if user.get("last_active") else "—"
+        created = (user.get("created_at") or "")[:10] or "—"
+        last_active = (user.get("last_active") or "")[:10] or "—"
 
         mode_icons = {"tutor": "🎓", "penfriend": "✉️", "flow": "🎙"}
-        mode_icon = mode_icons.get(mode, "")
         persona_icons = {
             "greg": "🧑‍⚕️", "mark": "👨‍🍳", "junior": "👨‍💻",
             "mrs smith": "👩‍🏫", "summer": "🌍", "jane": "☕"
         }
-        persona_icon = persona_icons.get(persona.lower(), "👤")
 
         text = (
             f"👤 <b>{html.escape(name)}</b> {html.escape(username)}\n"
             f"🆔 <code>{telegram_id}</code>\n\n"
             f"📚 Уровень: <b>{level}</b>\n"
-            f"🗂 Режим: {mode_icon} <b>{mode.capitalize()}</b>\n"
-            f"🎭 Персонаж: {persona_icon} <b>{persona}</b>\n\n"
+            f"🗂 Режим: {mode_icons.get(mode, '')} <b>{mode.capitalize()}</b>\n"
+            f"🎭 Персонаж: {persona_icons.get(persona.lower(), '👤')} <b>{persona}</b>\n\n"
             f"📅 Зарегистрирован: <b>{created}</b>\n"
             f"🕐 Последняя активность: <b>{last_active}</b>\n"
             f"🔥 Streak: <b>{streak} дн.</b>\n"
@@ -528,7 +524,6 @@ async def show_admin_user_card(callback: CallbackQuery):
             f"📖 Словарь: <b>{card['vocab_count']}</b> слов "
             f"· <b>{card['mastered_count']}</b> освоено"
         )
-
         await callback.message.edit_text(
             text,
             parse_mode="HTML",
