@@ -223,8 +223,7 @@ User Level: {level}"""
         history: Optional[List[Dict[str, str]]] = None,
         summary: Optional[str] = None,
         session_count: int = 0,
-        top_errors: Optional[List[str]] = None,
-        extra_instruction: str = ""
+        top_errors: Optional[List[str]] = None
     ) -> str:
         persona_prompt = get_persona_prompt(persona_key, session_count=session_count)
 
@@ -242,9 +241,6 @@ User Level: {level}"""
                 f"Occasionally use correct examples of these naturally in your own speech — "
                 f"no need to draw attention, just model the right form casually."
             )
-
-        if extra_instruction:
-            persona_prompt += f"\n\n{extra_instruction}"
 
         messages = [{"role": "system", "content": persona_prompt}]
         if history:
@@ -630,6 +626,62 @@ User Level: {level}"""
             return "Hey, it's been a while. Come back and let's talk!"
 
     # ─── Перевод ───────────────────────────────────────────────────────────
+
+    async def generate_stats_deep_dive(self, stats: dict) -> str:
+        """Генерирует нарративную статистику через LLM."""
+        user = stats.get("user", {})
+        level = str(user.get("level", "unknown")).upper()
+        streak = user.get("streak_days", 0)
+        persona = user.get("persona", "greg").capitalize()
+        vocab_count = stats.get("vocabulary_count", 0)
+        mastered = stats.get("mastered_count", 0)
+        msgs_this = stats.get("msgs_this_week", 0)
+        msgs_prev = stats.get("msgs_prev_week", 0)
+        error_week = stats.get("error_stats_week", {})
+        error_prev = stats.get("error_stats_prev_week", {})
+
+        top_error = max(error_week, key=error_week.get) if error_week else None
+        improving = [k for k in error_week if error_prev.get(k, 0) > error_week.get(k, 0)]
+
+        data_summary = f"""
+User stats:
+- Level: {level}
+- Current conversation partner: {persona}
+- Streak: {streak} days in a row
+- Messages this week: {msgs_this} (previous week: {msgs_prev})
+- Vocabulary: {vocab_count} words saved, {mastered} mastered
+- Error categories this week: {dict(error_week)}
+- Improving categories (fewer errors than last week): {improving}
+- Top error category: {top_error}
+"""
+
+        async def _deep_dive(client):
+            response = await client.chat.completions.create(
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a warm, encouraging English learning coach. "
+                            "Write a short personal progress report (4-6 sentences) based on the user's stats. "
+                            "Be specific — reference actual numbers. "
+                            "Highlight one strength, name the main area to work on, and end with one concrete tip or encouragement. "
+                            "Tone: honest, warm, like a good coach — not a cheerleader. "
+                            "Write in English only. No headers, no bullet points — flowing text."
+                        )
+                    },
+                    {"role": "user", "content": data_summary}
+                ],
+                temperature=0.7,
+                max_tokens=200
+            )
+            return response.choices[0].message.content
+
+        try:
+            return await self._make_request(_deep_dive)
+        except Exception as e:
+            logger.error(f"❌ Ошибка deep dive stats: {e}")
+            return "Couldn't generate your progress report right now. Try again later."
 
     async def translate_text(self, text: str) -> str:
         """Переводит текст с английского на русский"""

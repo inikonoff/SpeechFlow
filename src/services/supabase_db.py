@@ -460,6 +460,38 @@ class SupabaseDB:
     async def is_admin(self, telegram_id: int) -> bool:
         return telegram_id in ADMIN_IDS
 
+    async def get_admin_stats(self) -> Dict[str, Any]:
+        """Статистика для админ-панели."""
+        try:
+            from datetime import datetime, timezone, timedelta
+            now = datetime.now(timezone.utc)
+            today = now.date().isoformat()
+            week_ago = (now - timedelta(days=7)).isoformat()
+
+            total = self.client.table("users").select("id", count="exact").execute()
+            new_today = self.client.table("users").select("id", count="exact").gte("created_at", today).execute()
+            new_week = self.client.table("users").select("id", count="exact").gte("created_at", week_ago).execute()
+            active_week = self.client.table("users").select("id", count="exact").gte("last_active", week_ago).execute()
+
+            return {
+                "total": total.count or 0,
+                "new_today": new_today.count or 0,
+                "new_week": new_week.count or 0,
+                "active_week": active_week.count or 0,
+            }
+        except Exception as e:
+            logger.error(f"Error getting admin stats: {e}")
+            return {"total": 0, "new_today": 0, "new_week": 0, "active_week": 0}
+
+    async def get_all_user_ids(self) -> List[int]:
+        """Возвращает список всех telegram_id для broadcast."""
+        try:
+            response = self.client.table("users").select("telegram_id").execute()
+            return [r["telegram_id"] for r in (response.data or [])]
+        except Exception as e:
+            logger.error(f"Error getting all user ids: {e}")
+            return []
+
     # ─── Уведомления ───────────────────────────────────────────────────────
 
     async def get_users_for_notification(self) -> List[Dict[str, Any]]:
