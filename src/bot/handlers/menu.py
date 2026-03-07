@@ -3,7 +3,7 @@ import html
 import re
 from typing import Dict
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -188,8 +188,6 @@ def _build_quick_stats(stats: dict) -> str:
 
 def get_stats_keyboard(message_id: int, mode: str = "quick") -> InlineKeyboardMarkup:
     """mode: 'quick' или 'deep'"""
-    from aiogram.utils.keyboard import InlineKeyboardBuilder
-    from aiogram.types import InlineKeyboardButton
     builder = InlineKeyboardBuilder()
     if mode == "quick":
         builder.row(InlineKeyboardButton(
