@@ -1,5 +1,6 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
+from src.config import ADMIN_IDS
 
 from src.personas import get_all_personas
 
@@ -23,10 +24,11 @@ def get_persona_keyboard() -> InlineKeyboardMarkup:
     personas = get_all_personas()
     for key, name in personas.items():
         builder.row(InlineKeyboardButton(text=name, callback_data=f"persona_{key}"))
+    builder.row(InlineKeyboardButton(text="← Back", callback_data="settings"))
     return builder.as_markup()
 
 
-def get_main_menu_keyboard() -> InlineKeyboardMarkup:
+def get_main_menu_keyboard(user_id: int = 0) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="📖 How to use", callback_data="how_to_use"))
     builder.row(
@@ -34,6 +36,26 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="📚 My Vocabulary", callback_data="my_vocabulary"),
     )
     builder.row(InlineKeyboardButton(text="⚙️ Settings", callback_data="settings"))
+    if user_id in ADMIN_IDS:
+        builder.row(InlineKeyboardButton(text="🔧 Админ-панель", callback_data="admin_panel"))
+    return builder.as_markup()
+
+
+def get_stats_back_keyboard(message_id: int, mode: str) -> InlineKeyboardMarkup:
+    """Кнопка 'оригинал' после перевода статистики."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(
+        text="↩ Original",
+        callback_data=f"stats_original_{message_id}_{mode}"
+    ))
+    return builder.as_markup()
+
+
+def get_admin_panel_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="📊 Статистика пользователей", callback_data="admin_stats"))
+    builder.row(InlineKeyboardButton(text="📣 Broadcast",                callback_data="admin_broadcast"))
+    builder.row(InlineKeyboardButton(text="← Назад",                     callback_data="back_to_menu"))
     return builder.as_markup()
 
 
