@@ -305,6 +305,11 @@ VOICE_EXCUSES_DEFAULT = {
 }
 
 
+def get_persona(name: str) -> Dict[str, Any]:
+    """Возвращает персонажа по имени (регистронезависимо)"""
+    return PERSONAS.get(name.lower(), PERSONAS["greg"])
+
+
 def get_voice_excuse(persona_key: str) -> str:
     """Возвращает текст отмазки для исчерпанного триала."""
     data = VOICE_EXCUSES.get(persona_key, VOICE_EXCUSES_DEFAULT)
@@ -315,8 +320,6 @@ def get_last_exchange_instruction(persona_key: str) -> str:
     """Возвращает инструкцию для последнего голосового обмена."""
     data = VOICE_EXCUSES.get(persona_key, VOICE_EXCUSES_DEFAULT)
     return data["last_exchange"]
-    """Возвращает персонажа по имени (регистронезависимо)"""
-    return PERSONAS.get(name.lower(), PERSONAS["greg"])
 
 
 def get_persona_voice(name: str) -> str:
