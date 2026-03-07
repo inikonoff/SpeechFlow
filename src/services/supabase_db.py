@@ -446,9 +446,8 @@ class SupabaseDB:
         """Список всех пользователей для отображения в админке."""
         try:
             response = self.client.table("users").select(
-                "telegram_id, username, first_name, level, mode, persona, "
-                "streak_days, last_active, created_at, session_count, "
-                "voice_trials_used, voice_trials_reset_date"
+                "telegram_id, username, level, mode, persona, "
+                "streak_days, last_active, created_at"
             ).order("last_active", desc=True).execute()
             return response.data or []
         except Exception as e:
