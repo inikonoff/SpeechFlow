@@ -53,10 +53,10 @@ def get_stats_back_keyboard(message_id: int, mode: str) -> InlineKeyboardMarkup:
 
 def get_admin_panel_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="📊 Статистика",       callback_data="admin_stats"))
-    builder.row(InlineKeyboardButton(text="👥 Пользователи",     callback_data="admin_users"))
-    builder.row(InlineKeyboardButton(text="📣 Broadcast",        callback_data="admin_broadcast"))
-    builder.row(InlineKeyboardButton(text="← Назад",             callback_data="back_to_settings"))
+    builder.row(InlineKeyboardButton(text="📊 Статистика",    callback_data="admin_stats"))
+    builder.row(InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_users"))
+    builder.row(InlineKeyboardButton(text="📣 Broadcast",    callback_data="admin_broadcast"))
+    builder.row(InlineKeyboardButton(text="← Назад",         callback_data="back_to_settings"))
     return builder.as_markup()
 
 
@@ -67,7 +67,6 @@ def get_admin_stats_keyboard() -> InlineKeyboardMarkup:
 
 
 def get_admin_users_keyboard(users: list) -> InlineKeyboardMarkup:
-    """Список пользователей кнопками."""
     builder = InlineKeyboardBuilder()
     for u in users:
         uid = u.get("telegram_id", 0)
@@ -87,13 +86,14 @@ def get_admin_user_card_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="← К списку", callback_data="admin_users"))
     return builder.as_markup()
 
-
-def get_settings_keyboard(notifications_enabled: bool) -> InlineKeyboardMarkup:
+def get_settings_keyboard(notifications_enabled: bool, user_id: int = 0) -> InlineKeyboardMarkup:
     notif_text = "🔔 Notifications: ON" if notifications_enabled else "🔕 Notifications: OFF"
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text=notif_text,                  callback_data="toggle_notifications"))
     builder.row(InlineKeyboardButton(text="📊 Change Level",           callback_data="change_level"))
     builder.row(InlineKeyboardButton(text="✏️ Correction Sensitivity", callback_data="correction_rate"))
+    if user_id in ADMIN_IDS:
+        builder.row(InlineKeyboardButton(text="🔧 Админ-панель",       callback_data="admin_panel"))
     builder.row(InlineKeyboardButton(text="← Back",                    callback_data="back_to_menu"))
     return builder.as_markup()
 
