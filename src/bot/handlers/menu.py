@@ -491,14 +491,12 @@ async def show_admin_user_card(callback: CallbackQuery):
             return
 
         user = card.get("user", {})
-        name = user.get("first_name") or "—"
+        name = user.get("username") or str(telegram_id)
         username = f"@{user.get('username')}" if user.get("username") else "—"
         level = str(user.get("level") or "—").upper()
         mode = user.get("mode") or "—"
         persona = (user.get("persona") or "—").replace("_", " ").capitalize()
         streak = user.get("streak_days") or 0
-        sessions = user.get("session_count") or 0
-        voice_today = user.get("voice_trials_used") or 0
         created = (user.get("created_at") or "")[:10] or "—"
         last_active = (user.get("last_active") or "")[:10] or "—"
 
@@ -516,11 +514,9 @@ async def show_admin_user_card(callback: CallbackQuery):
             f"🎭 Персонаж: {persona_icons.get(persona.lower(), '👤')} <b>{persona}</b>\n\n"
             f"📅 Зарегистрирован: <b>{created}</b>\n"
             f"🕐 Последняя активность: <b>{last_active}</b>\n"
-            f"🔥 Streak: <b>{streak} дн.</b>\n"
-            f"🔁 Сессий: <b>{sessions}</b>\n\n"
+            f"🔥 Streak: <b>{streak} дн.</b>\n\n"
             f"💬 Сообщений всего: <b>{card['msgs_total']}</b>\n"
-            f"📈 За неделю: <b>{card['msgs_week']}</b>\n"
-            f"🎙 Голосовых сегодня: <b>{voice_today}</b>\n\n"
+            f"📈 За неделю: <b>{card['msgs_week']}</b>\n\n"
             f"📖 Словарь: <b>{card['vocab_count']}</b> слов "
             f"· <b>{card['mastered_count']}</b> освоено"
         )
