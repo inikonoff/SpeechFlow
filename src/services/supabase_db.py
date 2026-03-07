@@ -178,63 +178,6 @@ class SupabaseDB:
             logger.error(f"Error updating correction rate: {e}")
             return False
 
-    # ─── Голосовой триал (Free tier) ───────────────────────────────────────
-
-    FREE_VOICE_EXCHANGES = 2  # обменов (пользователь + персонаж = 1 обмен)
-
-    async def get_voice_trial(self, telegram_id: int) -> Dict[str, Any]:
-        """
-        Возвращает текущее состояние голосового триала.
-        Автоматически сбрасывает счётчик если наступил новый день (UTC).
-        Возвращает: {used: int, exhausted: bool}
-        """
-        try:
-            user = await self.get_or_create_user(telegram_id)
-            today = datetime.now(timezone.utc).date().isoformat()
-            reset_date = user.get("voice_trials_reset_date")
-            used = user.get("voice_trials_used", 0)
-
-            # Сброс если новый день
-            if reset_date != today:
-                self.client.table("users").update({
-                    "voice_trials_used": 0,
-                    "voice_trials_reset_date": today
-                }).eq("telegram_id", telegram_id).execute()
-                used = 0
-
-            return {
-                "used": used,
-                "exhausted": used >= self.FREE_VOICE_EXCHANGES
-            }
-        except Exception as e:
-            logger.error(f"Error getting voice trial: {e}")
-            return {"used": 0, "exhausted": False}
-
-    async def increment_voice_trial(self, telegram_id: int) -> int:
-        """
-        Увеличивает счётчик использованных голосовых обменов.
-        Возвращает новое значение.
-        """
-        try:
-            user = await self.get_or_create_user(telegram_id)
-            today = datetime.now(timezone.utc).date().isoformat()
-            reset_date = user.get("voice_trials_reset_date")
-            current = user.get("voice_trials_used", 0)
-
-            # Если новый день — начинаем с нуля
-            if reset_date != today:
-                current = 0
-
-            new_val = current + 1
-            self.client.table("users").update({
-                "voice_trials_used": new_val,
-                "voice_trials_reset_date": today
-            }).eq("telegram_id", telegram_id).execute()
-            return new_val
-        except Exception as e:
-            logger.error(f"Error incrementing voice trial: {e}")
-            return 0
-
     # ─── Словарь ───────────────────────────────────────────────────────────
 
     async def add_to_vocabulary(self, telegram_id: int, word_data: Dict[str, Any]) -> bool:
@@ -460,31 +403,87 @@ class SupabaseDB:
     async def is_admin(self, telegram_id: int) -> bool:
         return telegram_id in ADMIN_IDS
 
+    # ─── Админ-методы ──────────────────────────────────────────────────────
+
     async def get_admin_stats(self) -> Dict[str, Any]:
-        """Статистика для админ-панели."""
+        """Общая статистика для админ-панели."""
         try:
-            from datetime import datetime, timezone, timedelta
-            now = datetime.now(timezone.utc)
-            today = now.date().isoformat()
-            week_ago = (now - timedelta(days=7)).isoformat()
+            today = datetime.now(timezone.utc).date().isoformat()
+            week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
 
             total = self.client.table("users").select("id", count="exact").execute()
             new_today = self.client.table("users").select("id", count="exact").gte("created_at", today).execute()
             new_week = self.client.table("users").select("id", count="exact").gte("created_at", week_ago).execute()
             active_week = self.client.table("users").select("id", count="exact").gte("last_active", week_ago).execute()
 
+            # Топ персонажей и рейтинг режимов из текущих значений
+            all_users = self.client.table("users").select("persona, mode").execute()
+            persona_counts: Dict[str, int] = {}
+            mode_counts: Dict[str, int] = {}
+            for u in (all_users.data or []):
+                p = u.get("persona") or "unknown"
+                m = u.get("mode") or "unknown"
+                persona_counts[p] = persona_counts.get(p, 0) + 1
+                mode_counts[m] = mode_counts.get(m, 0) + 1
+
+            top_personas = sorted(persona_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+            mode_ranking = sorted(mode_counts.items(), key=lambda x: x[1], reverse=True)
+
             return {
                 "total": total.count or 0,
                 "new_today": new_today.count or 0,
                 "new_week": new_week.count or 0,
                 "active_week": active_week.count or 0,
+                "top_personas": top_personas,
+                "mode_ranking": mode_ranking,
             }
         except Exception as e:
             logger.error(f"Error getting admin stats: {e}")
-            return {"total": 0, "new_today": 0, "new_week": 0, "active_week": 0}
+            return {"total": 0, "new_today": 0, "new_week": 0, "active_week": 0,
+                    "top_personas": [], "mode_ranking": []}
+
+    async def get_all_users(self) -> List[Dict[str, Any]]:
+        """Список всех пользователей для отображения в админке."""
+        try:
+            response = self.client.table("users").select(
+                "telegram_id, username, first_name, level, mode, persona, "
+                "streak_days, last_active, created_at, session_count, "
+                "voice_trials_used, voice_trials_reset_date"
+            ).order("last_active", desc=True).execute()
+            return response.data or []
+        except Exception as e:
+            logger.error(f"Error getting all users: {e}")
+            return []
+
+    async def get_user_card(self, telegram_id: int) -> Dict[str, Any]:
+        """Полная карточка пользователя для админки."""
+        try:
+            user = await self.get_or_create_user(telegram_id)
+            week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+
+            msgs_total = self.client.table("messages").select("id", count="exact")\
+                .eq("user_id", telegram_id).eq("role", "user").execute()
+            msgs_week = self.client.table("messages").select("id", count="exact")\
+                .eq("user_id", telegram_id).eq("role", "user")\
+                .gte("created_at", week_ago).execute()
+            vocab = self.client.table("vocabulary").select("id, mastery_score")\
+                .eq("user_id", telegram_id).execute()
+
+            mastered = sum(1 for v in (vocab.data or []) if v.get("mastery_score", 0) >= 5)
+
+            return {
+                "user": user,
+                "msgs_total": msgs_total.count or 0,
+                "msgs_week": msgs_week.count or 0,
+                "vocab_count": len(vocab.data or []),
+                "mastered_count": mastered,
+            }
+        except Exception as e:
+            logger.error(f"Error getting user card: {e}")
+            return {}
 
     async def get_all_user_ids(self) -> List[int]:
-        """Возвращает список всех telegram_id для broadcast."""
+        """Все telegram_id для broadcast."""
         try:
             response = self.client.table("users").select("telegram_id").execute()
             return [r["telegram_id"] for r in (response.data or [])]
