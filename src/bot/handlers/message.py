@@ -90,15 +90,13 @@ async def send_response_with_translate(
     Отправляет ответ с кнопкой Translate.
     extra_keyboard — дополнительные кнопки (Switch в Flow Mode).
     """
-    safe_response = html.escape(chat_response)
-
     if should_reply_voice:
         voice_bytes = await groq_client.text_to_speech(chat_response, voice=voice)
         if voice_bytes:
             voice_file = BufferedInputFile(voice_bytes, filename="response.wav")
             await message.answer_voice(voice_file)
 
-    text_body = f"💬 {safe_response}"
+    text_body = f"💬 {_highlight_vocab_tags(chat_response)}"
     if analysis_text and not should_reply_voice:
         text_body = f"{text_body}\n\n{analysis_text}"
 
@@ -696,7 +694,8 @@ async def handle_original(callback: CallbackQuery):
             await callback.answer("Original text not available.", show_alert=True)
             return
 
-        safe_original = html.escape(original_text)
+        # Применяем highlight (на случай если в кэше сырой текст с [VOCAB:...])
+        display_original = _highlight_vocab_tags(original_text)
 
         current_markup = callback.message.reply_markup
         from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -712,7 +711,7 @@ async def handle_original(callback: CallbackQuery):
                         builder.row(btn)
 
         await callback.message.edit_text(
-            f"💬 {safe_original}",
+            f"💬 {display_original}",
             parse_mode="HTML",
             reply_markup=builder.as_markup()
         )
@@ -735,9 +734,8 @@ async def flow_show_text(callback: CallbackQuery):
             await callback.answer("Text not available.", show_alert=True)
             return
 
-        safe_text = html.escape(original)
         await callback.message.reply(
-            f"💬 {safe_text}",
+            f"💬 {_highlight_vocab_tags(original)}",
             parse_mode="HTML",
             reply_markup=get_flow_voice_text_keyboard(message_id)
         )
@@ -783,9 +781,8 @@ async def flow_original(callback: CallbackQuery):
             await callback.answer("Text not available.", show_alert=True)
             return
 
-        safe_text = html.escape(original)
         await callback.message.edit_text(
-            f"💬 {safe_text}",
+            f"💬 {_highlight_vocab_tags(original)}",
             parse_mode="HTML",
             reply_markup=get_flow_voice_text_keyboard(message_id)
         )
