@@ -1,5 +1,5 @@
 """
-SpeechFlow AI — FSM States
+SpeechFlow Pro — FSM States
 Shared across handlers to avoid circular imports.
 """
 
