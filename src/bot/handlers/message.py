@@ -314,25 +314,33 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
 
         # Уведомление о смене персонажа
         persona_display = get_persona_display(persona_key)
+        active_mode_final = user.get("mode", MODE_FLOW)
+
         if switch_context:
             await callback.message.answer(f"↩ Switched to {persona_display}", parse_mode="HTML")
+        elif active_mode_final == MODE_PENFRIEND:
+            await callback.message.answer(f"✉️ PenFriend — {persona_display}", parse_mode="HTML")
         else:
             await callback.message.answer(f"🎙 Flow Mode — {persona_display}", parse_mode="HTML")
 
-        # Приветствие — голос с caption (имя персонажа)
-        voice_bytes = await groq_client.text_to_speech(greeting, voice=voice)
-        if voice_bytes:
-            voice_file = BufferedInputFile(voice_bytes, filename="greeting.wav")
-            sent = await callback.message.answer_voice(
-                voice_file,
-                caption=persona_display,
-                reply_markup=get_flow_voice_keyboard(0)  # placeholder id
-            )
-            # Обновляем keyboard с реальным message_id
-            _originals_cache[sent.message_id] = greeting
-            await sent.edit_reply_markup(
-                reply_markup=get_flow_voice_keyboard(sent.message_id)
-            )
+        # Приветствие голосом — только для Flow
+        if active_mode_final != MODE_PENFRIEND:
+            voice_bytes = await groq_client.text_to_speech(greeting, voice=voice)
+            if voice_bytes:
+                voice_file = BufferedInputFile(voice_bytes, filename="greeting.wav")
+                sent = await callback.message.answer_voice(
+                    voice_file,
+                    caption=persona_display,
+                    reply_markup=get_flow_voice_keyboard(0)
+                )
+                _originals_cache[sent.message_id] = greeting
+                await sent.edit_reply_markup(
+                    reply_markup=get_flow_voice_keyboard(sent.message_id)
+                )
+        else:
+            # PenFriend — текстовое приветствие
+            safe_greeting = __import__('html').escape(greeting)
+            await callback.message.answer(f"💬 {safe_greeting}", parse_mode="HTML")
 
         await callback.answer()
 
