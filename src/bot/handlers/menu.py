@@ -366,15 +366,6 @@ async def toggle_vocab_practice(callback: CallbackQuery):
         await callback.answer("Error.", show_alert=True)
 
 
-
-    await callback.message.edit_text(
-        "<b>Select your new English level:</b>",
-        reply_markup=get_level_keyboard(),
-        parse_mode="HTML"
-    )
-    await callback.answer()
-
-
 @router.callback_query(F.data == "change_persona")
 async def change_persona(callback: CallbackQuery, state: FSMContext):
     await state.update_data(from_settings=True)
