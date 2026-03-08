@@ -431,14 +431,10 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
 
         persona_display = get_persona_display(persona_key)
 
+        penfriend_delay = None
         if active_mode == MODE_PENFRIEND:
-            # PenFriend — только текст с имитацией набора
-            delay = _penfriend_typing_delay(chat_response)
-            await message.bot.send_chat_action(user_id, "typing")
-            await asyncio.sleep(delay)
-            sent = await message.answer(f"💬 {chat_response}", parse_mode="HTML")
-            _originals_cache[sent.message_id] = chat_response
-            await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
+            # Считаем задержку заранее, отправим после vocab блока
+            penfriend_delay = _penfriend_typing_delay(chat_response)
         else:
             # Flow Mode — голос с caption и кнопками Text / Translate
             voice_bytes = await groq_client.text_to_speech(chat_response, voice=voice)
@@ -453,6 +449,14 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
                 await sent.edit_reply_markup(
                     reply_markup=get_flow_voice_keyboard(sent.message_id)
                 )
+
+        # PenFriend — отправляем после vocab блока чтобы [VOCAB:] теги были применены
+        if active_mode == MODE_PENFRIEND and penfriend_delay is not None:
+            await message.bot.send_chat_action(user_id, "typing")
+            await asyncio.sleep(penfriend_delay)
+            sent = await message.answer(f"💬 {chat_response}", parse_mode="HTML")
+            _originals_cache[sent.message_id] = chat_response
+            await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
 
         # Если прощание — саммаризация в фоне + инкремент сессии
         if is_farewell:
@@ -656,7 +660,9 @@ async def handle_translate(callback: CallbackQuery):
             raw = callback.message.text or ""
             original_text = raw.removeprefix("💬 ").strip()
 
-        translation = await groq_client.translate_text(original_text)
+        # Зачищаем HTML-теги перед переводом — переводчику нужен чистый текст
+        clean_for_translate = re.sub(r'<[^>]+>', '', original_text)
+        translation = await groq_client.translate_text(clean_for_translate)
         safe_translation = html.escape(translation)
 
         # Сохраняем остальные кнопки (Switch если был)
@@ -756,7 +762,8 @@ async def flow_translate(callback: CallbackQuery):
             await callback.answer("Text not available.", show_alert=True)
             return
 
-        translation = await groq_client.translate_text(original)
+        clean_original = re.sub(r'<[^>]+>', '', original)
+        translation = await groq_client.translate_text(clean_original)
         safe_translation = html.escape(translation)
 
         await callback.message.reply(
@@ -839,7 +846,8 @@ async def uvoice_translate(callback: CallbackQuery):
             await callback.answer("Text not available.", show_alert=True)
             return
 
-        translation = await groq_client.translate_text(user_text)
+        clean_user_text = re.sub(r'<[^>]+>', '', user_text)
+        translation = await groq_client.translate_text(clean_user_text)
         safe_translation = html.escape(translation)
 
         await callback.message.edit_text(
