@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 _how_to_originals: Dict[int, str] = {}
 
-HOW_TO_TEXT = """🗣 <b>Speech Flow AI — How it works</b>
+HOW_TO_TEXT = """🗣 <b>Speech Flow Pro — How it works</b>
 
 <b>🎓 Tutor Mode</b>
 Speak or write in English. Mrs. Smith corrects mistakes naturally and explains them in Russian. No red pen — just a conversation that makes you better.
@@ -103,7 +103,7 @@ async def cmd_settings(message: Message):
 
 async def cmd_author(message: Message):
     await message.answer(
-        "👨‍💻 <b>SpeechFlow AI</b>\n\n"
+        "👨‍💻 <b>SpeechFlow Pro</b>\n\n"
         "Created by: @inikonoff\n"
         "Feedback and suggestions are welcome!",
         parse_mode="HTML"
