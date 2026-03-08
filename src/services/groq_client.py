@@ -81,7 +81,7 @@ class GroqClient:
     # ─── Коррекция (обычный режим) ─────────────────────────────────────────
 
     async def correct_text(self, text: str, level: str) -> Dict[str, Any]:
-        system_prompt = """# ROLE
+        system_prompt = f"""# ROLE
 You are an elite ESL Professor with 15+ years of experience. Your goal is to analyze the user's input with surgical precision, provide actionable corrections, and explain the underlying logic in a way that accelerates fluency.
 
 # LEVEL-ADAPTIVE PEDAGOGY
@@ -112,13 +112,20 @@ You are an elite ESL Professor with 15+ years of experience. Your goal is to ana
   "vocabulary_items": [
     {
       "word_or_phrase": "...",
+      "lemma": "...(base form, e.g. 'make a decision' not 'made a decision')",
       "translation": "...",
       "context_sentence": "...",
-      "mastery_score": 0
+      "word_type": "word|phrase|phrasal_verb|collocation|grammar_pattern"
     }
   ],
   "error_category": "grammar|vocabulary|pronunciation|structure|style|none"
-}"""
+}
+
+VOCABULARY RULES:
+- Only save meaningful vocabulary: collocations, phrasal verbs, idioms, grammar patterns, advanced words.
+- NEVER save basic words like: good, bad, thing, very, go, come, say, make, know, get, just, really, also.
+- Min phrase length: 2+ words for phrases, 6+ chars for single words.
+- lemma must be the base/infinitive form of the word or phrase."""
 
         async def _correct(client):
             response = await client.chat.completions.create(
@@ -134,7 +141,7 @@ You are an elite ESL Professor with 15+ years of experience. Your goal is to ana
 
         try:
             result = await self._make_request(_correct)
-            match = re.search(r'\{.*\}', result, re.DOTALL)
+            match = re.search(r'{.*}', result, re.DOTALL)
             clean_json = match.group(0) if match else result
             return json.loads(clean_json)
         except Exception as e:
@@ -516,12 +523,16 @@ User Level: {level}"""
             logger.error(f"❌ Ошибка схлопывания саммари: {e}")
             return combined  # fallback — возвращаем как есть
 
-    # ─── Словарь: напоминание ──────────────────────────────────────────────
+    # ─── Vocabulary Engine ────────────────────────────────────────────────
 
-    async def generate_vocab_reminder(self, word: str, translation: str, bot_response: str) -> str:
-        """
-        Добавляет в конец готового ответа бота органичное напоминание о слове.
-        """
+    async def generate_vocab_reminder(
+        self,
+        word: str,
+        translation: str,
+        bot_response: str,
+        persona_prompt: str = ""
+    ) -> str:
+        """Перестраивает ответ через conversational trap. Помечает слово [VOCAB:word]."""
         async def _remind(client):
             response = await client.chat.completions.create(
                 model="meta-llama/llama-4-scout-17b-16e-instruct",
@@ -529,30 +540,95 @@ User Level: {level}"""
                     {
                         "role": "system",
                         "content": (
-                            "You are helping a language learner remember vocabulary. "
-                            "You will receive a conversation response and a word to remind. "
-                            "Append ONE short, natural sentence at the end of the response "
-                            "that reminds the user about the word and invites them to use it. "
-                            "Keep it casual and brief. Don't start a new paragraph — "
-                            "just add the reminder sentence after the existing text, separated by a space. "
-                            "Example: 'By the way — you saved the word *utility* recently. Can you use it in your next message?'"
+                            "You are rewriting a character's response to naturally include a target vocabulary word. "
+                            "Keep the character's voice and personality. "
+                            "You MUST include the target word or phrase exactly once. "
+                            "Build a question or statement around it — don't announce it explicitly. "
+                            "Wrap the target word/phrase in [VOCAB:word] tags. "
+                            "Example: 'So you finally [VOCAB:made a decision] — what pushed you?' "
+                            "Keep it under 80 words. Return only the rewritten response."
+                            + (f"\n\nCHARACTER:\n{persona_prompt[:300]}" if persona_prompt else "")
                         )
                     },
                     {
                         "role": "user",
-                        "content": f"RESPONSE: {bot_response}\nWORD: {word} ({translation})"
+                        "content": f"ORIGINAL RESPONSE: {bot_response}\nTARGET WORD: {word} ({translation})"
                     }
                 ],
                 temperature=0.7,
-                max_tokens=200
+                max_tokens=150
             )
             return response.choices[0].message.content.strip()
 
         try:
             return await self._make_request(_remind)
         except Exception as e:
-            logger.error(f"❌ Ошибка генерации напоминания о слове: {e}")
+            logger.error(f"❌ Ошибка vocab reminder: {e}")
             return bot_response
+
+    async def generate_practice_response(
+        self,
+        persona_prompt: str,
+        history: list,
+        words: list,
+        extra_instruction: str = ""
+    ) -> str:
+        """Ответ в Practice Mode — органично вплетает слова, помечает [VOCAB:word]."""
+        word_list = "\n".join(f"- {w['word_or_phrase']} ({w.get('translation', '')})" for w in words)
+
+        async def _practice(client):
+            response = await client.chat.completions.create(
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            f"{persona_prompt}\n\n"
+                            f"# VOCABULARY PRACTICE\n"
+                            f"Naturally weave these words into your response where they fit:\n{word_list}\n"
+                            f"Wrap each used word in [VOCAB:word] tags. Don't force all of them.\n"
+                            f"Never announce vocabulary practice — just talk naturally."
+                            + (f"\n{extra_instruction}" if extra_instruction else "")
+                        )
+                    },
+                    *history
+                ],
+                temperature=0.8,
+                max_tokens=200
+            )
+            return response.choices[0].message.content.strip()
+
+        try:
+            return await self._make_request(_practice)
+        except Exception as e:
+            logger.error(f"❌ Ошибка practice response: {e}")
+            return ""
+
+    async def detect_word_usage(self, word: str, user_message: str) -> bool:
+        """LLM detection: использовал ли пользователь слово или его форму. yes/no."""
+        async def _detect(client):
+            response = await client.chat.completions.create(
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Answer only 'yes' or 'no'. Did the user use the target phrase or any of its forms?"
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Target: {word}\nUser: {user_message}"
+                    }
+                ],
+                temperature=0.0,
+                max_tokens=3
+            )
+            return response.choices[0].message.content.strip().lower().startswith("yes")
+
+        try:
+            return await self._make_request(_detect)
+        except Exception as e:
+            logger.error(f"❌ Ошибка detect word usage: {e}")
+            return False
 
     # ─── Уведомления ───────────────────────────────────────────────────────
 
