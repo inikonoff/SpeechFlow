@@ -12,10 +12,7 @@ from src.config import settings, ADMIN_IDS
 from src.services.supabase_db import db
 from src.services.groq_client import groq_client
 from src.utils.audio import save_voice_file, cleanup_file, read_file_bytes
-from src.personas import (
-    get_persona_voice, get_persona_display, get_persona_tutor_prompt,
-    get_voice_excuse, get_last_exchange_instruction
-)
+from src.personas import get_persona_voice, get_persona_display, get_persona_tutor_prompt, get_voice_excuse, get_last_exchange_instruction
 from src.bot.keyboards import (
     get_translate_keyboard,
     get_original_keyboard,
@@ -36,43 +33,16 @@ from src.modes import (
     CORRECTION_RATE_DEFAULT,
 )
 
+def _highlight_vocab_tags(text: str) -> str:
+    """Заменяет [VOCAB:word] → <b>word</b> для отображения в Telegram."""
+    return re.sub(r'\[VOCAB:([^\]]+)\]', r'<b>\1</b>', text)
+
+
 router = Router()
 logger = logging.getLogger(__name__)
 
-import time as _time
-
-# Кеш оригинальных текстов для кнопки Original: {message_id: (text, timestamp)}
-# TTL = 2 часа — сообщения старше этого времени из кэша вычищаются
-_CACHE_TTL = 7200  # секунд
-
-class _TTLCache:
-    def __init__(self, ttl: int):
-        self._ttl = ttl
-        self._data: Dict[int, tuple] = {}  # {key: (value, timestamp)}
-
-    def set(self, key: int, value: str) -> None:
-        self._data[key] = (value, _time.monotonic())
-        self._maybe_evict()
-
-    def get(self, key: int) -> str | None:
-        entry = self._data.get(key)
-        if entry is None:
-            return None
-        value, ts = entry
-        if _time.monotonic() - ts > self._ttl:
-            del self._data[key]
-            return None
-        return value
-
-    def _maybe_evict(self) -> None:
-        """Вычищаем протухшие записи раз в ~100 новых записей"""
-        if len(self._data) % 100 == 0:
-            now = _time.monotonic()
-            expired = [k for k, (_, ts) in self._data.items() if now - ts > self._ttl]
-            for k in expired:
-                del self._data[k]
-
-_originals_cache = _TTLCache(_CACHE_TTL)
+# Кеш оригинальных текстов для кнопки Original: {message_id: original_text}
+_originals_cache: Dict[int, str] = {}
 
 # Порог схлопывания саммари
 SUMMARY_MERGE_THRESHOLD = 4
@@ -132,7 +102,7 @@ async def send_response_with_translate(
         text_body = f"{text_body}\n\n{analysis_text}"
 
     sent = await message.answer(text_body, parse_mode="HTML")
-    _originals_cache.set(sent.message_id, chat_response)
+    _originals_cache[sent.message_id] = chat_response
 
     if extra_keyboard:
         from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -209,9 +179,7 @@ async def run_merge_summaries(user_id: int) -> None:
 
 @router.message(F.text == "🎙 Flow")
 async def activate_flow(message: Message, state: FSMContext):
-    await db.update_mode(message.from_user.id, MODE_FLOW)
     await state.set_state(FlowState.choosing_persona)
-    await state.update_data(active_mode=MODE_FLOW)
     await message.answer(
         "Who would you like to talk to?",
         reply_markup=get_persona_keyboard()
@@ -246,9 +214,8 @@ async def deactivate_tutor(message: Message, state: FSMContext):
 
 @router.message(F.text == "✉️ PenFriend")
 async def activate_penfriend(message: Message, state: FSMContext):
-    await db.update_mode(message.from_user.id, MODE_PENFRIEND)
     await state.set_state(FlowState.choosing_persona)
-    await state.update_data(active_mode=MODE_PENFRIEND)
+    await db.update_mode(message.from_user.id, MODE_PENFRIEND)
     await message.answer(
         "✉️ <b>PenFriend Mode</b>\n\nWho would you like to write to?",
         parse_mode="HTML",
@@ -295,17 +262,33 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
 
         fsm_data = await state.get_data()
         switch_context = fsm_data.get("switch_context", "")
-        active_mode = fsm_data.get("active_mode", MODE_FLOW)
+        from_settings = fsm_data.get("from_settings", False)
         user = await db.get_or_create_user(user_id)
 
         await db.update_user_persona(user_id, persona_key)
         await db.update_user_voice(user_id, voice)
 
+        # Смена персонажа из Settings — просто сохраняем и возвращаем в настройки
+        if from_settings:
+            from src.personas import get_all_personas
+            display_name = get_persona_display(persona_key)
+            await state.clear()
+            from src.bot.keyboards import get_settings_keyboard
+            user = await db.get_or_create_user(user_id)
+            notif = user.get("notifications_enabled", True)
+            await callback.message.edit_text(
+                f"👤 Now talking to {display_name}.\n\n⚙️ <b>Settings</b>",
+                parse_mode="HTML",
+                reply_markup=get_settings_keyboard(notif)
+            )
+            await callback.answer()
+            return
+
         await state.update_data(
             persona_key=persona_key,
             voice=voice,
             switch_context="",
-            active_mode=active_mode
+            active_mode=user.get("mode", MODE_FLOW)
         )
         await state.set_state(FlowState.active)
 
@@ -333,48 +316,23 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
         persona_display = get_persona_display(persona_key)
         if switch_context:
             await callback.message.answer(f"↩ Switched to {persona_display}", parse_mode="HTML")
-        elif active_mode == MODE_PENFRIEND:
-            await callback.message.answer(f"✉️ PenFriend Mode — {persona_display}", parse_mode="HTML", reply_markup=get_penfriend_keyboard())
         else:
-            await callback.message.answer(f"🎙 Flow Mode — {persona_display}", parse_mode="HTML", reply_markup=get_flow_stop_keyboard())
+            await callback.message.answer(f"🎙 Flow Mode — {persona_display}", parse_mode="HTML")
 
-        # Приветствие — текст для PenFriend, голос для Flow
-        if active_mode == MODE_PENFRIEND:
-            safe_greeting = html.escape(greeting)
-            sent = await callback.message.answer(
-                f"💬 {safe_greeting}",
-                parse_mode="HTML",
-                reply_markup=get_translate_keyboard(0)
+        # Приветствие — голос с caption (имя персонажа)
+        voice_bytes = await groq_client.text_to_speech(greeting, voice=voice)
+        if voice_bytes:
+            voice_file = BufferedInputFile(voice_bytes, filename="greeting.wav")
+            sent = await callback.message.answer_voice(
+                voice_file,
+                caption=persona_display,
+                reply_markup=get_flow_voice_keyboard(0)  # placeholder id
             )
-            _originals_cache.set(sent.message_id, greeting)
-            await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
-        else:
-            # Flow — проверяем голосовой триал (админ пропускает)
-            trial = {"exhausted": False} if user_id in ADMIN_IDS else await db.get_voice_trial(user_id)
-            if trial["exhausted"]:
-                # Триал исчерпан — персонаж объясняет в своей вселенной
-                excuse = get_voice_excuse(persona_key)
-                sent = await callback.message.answer(
-                    f"💬 {html.escape(excuse)}",
-                    parse_mode="HTML",
-                    reply_markup=get_translate_keyboard(0)
-                )
-                _originals_cache.set(sent.message_id, excuse)
-                await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
-            else:
-                await db.increment_voice_trial(user_id)
-                voice_bytes = await groq_client.text_to_speech(greeting, voice=voice)
-                if voice_bytes:
-                    voice_file = BufferedInputFile(voice_bytes, filename="greeting.wav")
-                    sent = await callback.message.answer_voice(
-                        voice_file,
-                        caption=persona_display,
-                        reply_markup=get_flow_voice_keyboard(0)
-                    )
-                    _originals_cache.set(sent.message_id, greeting)
-                    await sent.edit_reply_markup(
-                        reply_markup=get_flow_voice_keyboard(sent.message_id)
-                    )
+            # Обновляем keyboard с реальным message_id
+            _originals_cache[sent.message_id] = greeting
+            await sent.edit_reply_markup(
+                reply_markup=get_flow_voice_keyboard(sent.message_id)
+            )
 
         await callback.answer()
 
@@ -407,19 +365,19 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             return
 
         if message.voice:
-            # Проверяем триал перед транскрипцией (админ пропускает)
-            trial = {"exhausted": False} if user_id in ADMIN_IDS else await db.get_voice_trial(user_id)
-            if trial["exhausted"]:
-                # Не транскрибируем — персонаж сразу объясняет в своей вселенной
-                excuse = get_voice_excuse(persona_key)
-                sent = await message.answer(
-                    f"💬 {html.escape(excuse)}",
-                    parse_mode="HTML",
-                    reply_markup=get_translate_keyboard(0)
-                )
-                _originals_cache.set(sent.message_id, excuse)
-                await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
-                return
+            # ── Дневной лимит голосовых для не-админов ────────────────────
+            is_admin = user_id in ADMIN_IDS
+            if not is_admin:
+                voice_check = await db.check_and_increment_daily_voice(user_id)
+                if not voice_check["allowed"]:
+                    excuse = get_voice_excuse(persona_key)
+                    await message.answer(excuse)
+                    return
+                # Последний разрешённый обмен — передаём инструкцию персонажу
+                if voice_check["is_last"]:
+                    fsm_data["last_voice_exchange"] = True
+                    await state.set_data(fsm_data)
+
             await message.bot.send_chat_action(user_id, "typing")
             voice_file = await message.bot.get_file(message.voice.file_id)
             voice_bytes = await message.bot.download_file(voice_file.file_path)
@@ -446,23 +404,13 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             history_task, summary_task, farewell_task, errors_task
         )
 
-        # Определяем последний голосовой обмен — персонаж добавит прощание с голосом
-        trial_for_last = (
-            {"used": 0, "exhausted": False}
-            if user_id in ADMIN_IDS
-            else await db.get_voice_trial(user_id)
-        )
-        is_last_voice_exchange = (
-            active_mode not in (MODE_PENFRIEND,)
-            and not trial_for_last["exhausted"]
-            and trial_for_last["used"] + 1 >= db.FREE_VOICE_EXCHANGES
-        )
-        last_exchange_note = (
-            get_last_exchange_instruction(persona_key)
-            if is_last_voice_exchange else ""
-        )
-
         await message.bot.send_chat_action(user_id, "record_voice")
+        extra_instr = ""
+        if fsm_data.get("last_voice_exchange"):
+            extra_instr = get_last_exchange_instruction(persona_key)
+            # Сбрасываем флаг чтобы не повторялось
+            fsm_data.pop("last_voice_exchange", None)
+            await state.set_data(fsm_data)
         chat_response = await groq_client.generate_flow_response(
             text=user_text,
             persona_key=persona_key,
@@ -470,7 +418,7 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             summary=summary,
             session_count=user.get("session_count", 0),
             top_errors=top_errors,
-            extra_instruction=last_exchange_note
+            extra_instruction=extra_instr
         )
         await db.save_message(user_id, "assistant", chat_response)
 
@@ -483,35 +431,22 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             await asyncio.sleep(delay)
             safe_response = html.escape(chat_response)
             sent = await message.answer(f"💬 {safe_response}", parse_mode="HTML")
-            _originals_cache.set(sent.message_id, chat_response)
+            _originals_cache[sent.message_id] = chat_response
             await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
         else:
-            # Flow — проверяем триал для голоса персонажа (админ пропускает)
-            trial = {"exhausted": False} if user_id in ADMIN_IDS else await db.get_voice_trial(user_id)
-            if trial["exhausted"]:
-                # Триал исчерпан — персонаж объясняет в своей вселенной, голос не нужен
-                excuse = get_voice_excuse(persona_key)
-                sent = await message.answer(
-                    f"💬 {html.escape(excuse)}",
-                    parse_mode="HTML",
-                    reply_markup=get_translate_keyboard(0)
+            # Flow Mode — голос с caption и кнопками Text / Translate
+            voice_bytes = await groq_client.text_to_speech(chat_response, voice=voice)
+            if voice_bytes:
+                voice_file = BufferedInputFile(voice_bytes, filename="response.wav")
+                sent = await message.answer_voice(
+                    voice_file,
+                    caption=persona_display,
+                    reply_markup=get_flow_voice_keyboard(0)
                 )
-                _originals_cache.set(sent.message_id, excuse)
-                await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
-            else:
-                await db.increment_voice_trial(user_id)
-                voice_bytes = await groq_client.text_to_speech(chat_response, voice=voice)
-                if voice_bytes:
-                    voice_file = BufferedInputFile(voice_bytes, filename="response.wav")
-                    sent = await message.answer_voice(
-                        voice_file,
-                        caption=persona_display,
-                        reply_markup=get_flow_voice_keyboard(0)
-                    )
-                    _originals_cache.set(sent.message_id, chat_response)
-                    await sent.edit_reply_markup(
-                        reply_markup=get_flow_voice_keyboard(sent.message_id)
-                    )
+                _originals_cache[sent.message_id] = chat_response
+                await sent.edit_reply_markup(
+                    reply_markup=get_flow_voice_keyboard(sent.message_id)
+                )
 
         # Если прощание — саммаризация в фоне + инкремент сессии
         if is_farewell:
@@ -543,6 +478,15 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
 
         if message.voice:
             is_voice_input = True
+            # ── Дневной лимит голосовых для не-админов ────────────────────
+            if not is_admin:
+                voice_check = await db.check_and_increment_daily_voice(user_id)
+                if not voice_check["allowed"]:
+                    user_persona = user.get("persona", "greg")
+                    excuse = get_voice_excuse(user_persona)
+                    await message.answer(excuse)
+                    return
+
             await message.bot.send_chat_action(user_id, "typing")
             voice_file = await message.bot.get_file(message.voice.file_id)
             voice_bytes = await message.bot.download_file(voice_file.file_path)
@@ -593,29 +537,64 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
             for item in analysis_data['vocabulary_items']:
                 await db.add_to_vocabulary(user_id, item)
 
-        # Mastery check
-        used_word = await db.find_word_in_text(user_id, user_text)
-        if used_word:
-            new_score = await db.increase_mastery(used_word["id"])
-            if new_score >= 5:
-                safe_word = html.escape(used_word["word_or_phrase"])
-                await message.answer(
-                    f"✅ <b>{safe_word}</b> — mastered! Added to your collection.",
-                    parse_mode="HTML"
-                )
+        # ── Vocabulary Engine ──────────────────────────────────────────────
+        # 1. LLM detection: использовал ли пользователь напомянутое слово
+        recently_reminded = await db.get_recently_reminded_words(user_id)
+        for reminded_word in recently_reminded:
+            used = await groq_client.detect_word_usage(
+                word=reminded_word["word_or_phrase"],
+                user_message=user_text
+            )
+            if used:
+                new_score = await db.mark_word_used(reminded_word["id"])
+                if new_score >= 5:
+                    safe_word = html.escape(reminded_word["word_or_phrase"])
+                    await message.answer(
+                        f"✅ <b>{safe_word}</b> — mastered! Added to your collection.",
+                        parse_mode="HTML"
+                    )
+                break  # достаточно одного совпадения
 
-        # Vocab reminder каждые 4 сообщения
+        # 2. Vocab reminder: spaced repetition по mastery
+        user_data = await db.get_or_create_user(user_id)
+        practice_mode = user_data.get("vocabulary_practice_mode", False)
         remind_counter = await db.increment_vocab_remind_counter(user_id)
-        if remind_counter >= 4:
-            await db.reset_vocab_remind_counter(user_id)
+
+        if practice_mode:
+            # Practice mode: слова по уровню
+            level_counts = {"beginner": 2, "elementary": 2, "intermediate": 3, "advanced": 4}
+            word_count = level_counts.get(user_level.lower(), 3)
+            practice_words = await db.get_words_for_practice(user_id, count=word_count)
+            if practice_words:
+                from src.personas import get_persona_prompt
+                persona_key = user_data.get("persona", "mrs_smith")
+                p_prompt = get_persona_prompt(persona_key)
+                chat_response = await groq_client.generate_practice_response(
+                    persona_prompt=p_prompt,
+                    history=history,
+                    words=practice_words
+                )
+                for w in practice_words:
+                    await db.mark_word_reminded(w["id"])
+                chat_response = _highlight_vocab_tags(chat_response)
+        else:
+            # Обычный режим: spaced repetition интервал по mastery
             word_to_remind = await db.get_word_for_reminder(user_id)
             if word_to_remind:
-                await db.mark_word_reminded(word_to_remind["id"])
-                chat_response = await groq_client.generate_vocab_reminder(
-                    word=word_to_remind["word_or_phrase"],
-                    translation=word_to_remind.get("translation", ""),
-                    bot_response=chat_response
-                )
+                interval = db.get_reminder_interval(word_to_remind.get("mastery_score", 0))
+                if remind_counter >= interval:
+                    await db.reset_vocab_remind_counter(user_id)
+                    await db.mark_word_reminded(word_to_remind["id"])
+                    from src.personas import get_persona_prompt
+                    persona_key = user_data.get("persona", "mrs_smith")
+                    p_prompt = get_persona_prompt(persona_key)
+                    chat_response = await groq_client.generate_vocab_reminder(
+                        word=word_to_remind["word_or_phrase"],
+                        translation=word_to_remind.get("translation", ""),
+                        bot_response=chat_response,
+                        persona_prompt=p_prompt
+                    )
+                    chat_response = _highlight_vocab_tags(chat_response)
 
         error_cat = analysis_data.get('error_category')
         if error_cat and error_cat.lower() != 'none':
@@ -647,7 +626,7 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
         # Текстовый ответ с кнопкой Translate
         safe_response = html.escape(chat_response)
         sent = await message.answer(f"💬 {safe_response}", parse_mode="HTML")
-        _originals_cache.set(sent.message_id, chat_response)
+        _originals_cache[sent.message_id] = chat_response
         await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
 
         if is_farewell:

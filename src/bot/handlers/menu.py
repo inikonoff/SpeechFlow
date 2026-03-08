@@ -85,10 +85,6 @@ async def cmd_stats(message: Message):
     await _send_stats(message.from_user.id, message.answer)
 
 
-@router.message(Command("vocabulary"))
-async def cmd_vocabulary(message: Message):
-    await _send_vocabulary(message.from_user.id, message.answer)
-
 
 @router.message(Command("voice"))
 async def cmd_voice(message: Message):
@@ -107,10 +103,11 @@ async def cmd_voice(message: Message):
 async def cmd_settings(message: Message):
     user = await db.get_or_create_user(message.from_user.id)
     notif = user.get("notifications_enabled", True)
+    practice = user.get("vocabulary_practice_mode", False)
     await message.answer(
         "⚙️ <b>Settings</b>",
         parse_mode="HTML",
-        reply_markup=get_settings_keyboard(notif, message.from_user.id)
+        reply_markup=get_settings_keyboard(notif, message.from_user.id, practice)
     )
 
 
@@ -228,38 +225,79 @@ async def _send_stats(user_id: int, send_fn, edit_msg=None):
             await send_fn("Error loading stats.", parse_mode="HTML")
 
 
-async def _send_vocabulary(user_id: int, send_fn):
+# ─── Vocabulary helpers ────────────────────────────────────────────────────
+
+TAB_LABELS = {
+    "active":   "🔥 Active",
+    "all":      "📖 All",
+    "difficult":"⭐ Difficult",
+    "mastered": "✅ Mastered",
+}
+
+def _vocab_tab_keyboard(current_tab: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    tabs = ["active", "all", "difficult", "mastered"]
+    row = []
+    for t in tabs:
+        label = f"· {TAB_LABELS[t]} ·" if t == current_tab else TAB_LABELS[t]
+        row.append(InlineKeyboardButton(text=label, callback_data=f"vocab_tab_{t}"))
+    builder.row(*row)
+    return builder.as_markup()
+
+
+def _build_vocab_text(vocabulary: list, tab: str) -> str:
+    tab_label = TAB_LABELS.get(tab, "📖 Vocabulary")
+    if not vocabulary:
+        empty_msgs = {
+            "active": "No active words — keep chatting and they'll appear here.",
+            "difficult": "No difficult words yet. Great progress!",
+            "mastered": "No mastered words yet — keep practicing!",
+            "all": "Empty so far. Words from your conversations will appear here automatically.",
+        }
+        return f"📚 <b>Your Vocabulary — {tab_label}</b>\n\n{empty_msgs.get(tab, '')}"
+
+    text = f"📚 <b>Your Vocabulary — {tab_label}</b>  <i>({len(vocabulary)} words)</i>\n\n"
+    for i, item in enumerate(vocabulary, 1):
+        word = html.escape(item.get("word_or_phrase", ""))
+        translation = html.escape(item.get("translation", ""))
+        context = html.escape(item.get("context_sentence", ""))
+        score = item.get("mastery_score", 0)
+        reminded = item.get("times_reminded", 0)
+        used = item.get("times_used", 0)
+        wtype = item.get("word_type", "")
+
+        type_badge = {"phrasal_verb": "🔗", "collocation": "🔀", "grammar_pattern": "📐", "phrase": "💬"}.get(wtype, "")
+        mastery_bar = "█" * score + "░" * (5 - score)
+
+        text += f"{i}. {type_badge}<b>{word}</b> — {translation}\n"
+        if context:
+            short = context[:55] + "…" if len(context) > 55 else context
+            text += f"   <i>\"{short}\"</i>\n"
+        text += f"   <code>{mastery_bar}</code>"
+        if reminded > 0:
+            text += f"  reminded: {reminded}"
+        if used > 0:
+            text += f"  used: {used}"
+        text += "\n\n"
+    return text
+
+
+async def _send_vocabulary(user_id: int, send_fn, tab: str = "active", edit_msg=None):
     try:
-        vocabulary = await db.get_user_vocabulary(user_id, limit=20)
+        vocabulary = await db.get_user_vocabulary(user_id, tab=tab, limit=20)
+        text = _build_vocab_text(vocabulary, tab)
+        kb = _vocab_tab_keyboard(tab)
 
-        if not vocabulary:
-            await send_fn(
-                "📚 <b>Your Vocabulary</b>\n\n"
-                "Empty so far. Words from your conversations will appear here automatically.",
-                parse_mode="HTML"
-            )
-            return
-
-        vocab_text = "📚 <b>Your Vocabulary</b>\n\n"
-        vocab_text += "<i>🆕 New  📖 Learning  🔄 Reviewing  ✅ Mastered</i>\n\n"
-
-        for i, item in enumerate(vocabulary, 1):
-            word = html.escape(item.get("word_or_phrase", ""))
-            translation = html.escape(item.get("translation", ""))
-            context = html.escape(item.get("context_sentence", ""))
-            score = item.get("mastery_score", 0)
-            label = mastery_label(score)
-
-            vocab_text += f"{i}. {label} <b>{word}</b> — {translation}\n"
-            if context:
-                short = context[:60] + "..." if len(context) > 60 else context
-                vocab_text += f"   <i>\"{short}\"</i>\n"
-            vocab_text += "\n"
-
-        await send_fn(vocab_text, parse_mode="HTML")
+        if edit_msg:
+            await edit_msg(text, parse_mode="HTML", reply_markup=kb)
+        else:
+            await send_fn(text, parse_mode="HTML", reply_markup=kb)
     except Exception as e:
         logger.error(f"Error in vocabulary: {e}")
-        await send_fn("Error loading vocabulary.", parse_mode="HTML")
+        if edit_msg:
+            await edit_msg("Error loading vocabulary.", parse_mode="HTML")
+        else:
+            await send_fn("Error loading vocabulary.", parse_mode="HTML")
 
 
 # ─── Callbacks ─────────────────────────────────────────────────────────────
@@ -281,10 +319,11 @@ async def show_settings(callback: CallbackQuery):
     try:
         user = await db.get_or_create_user(callback.from_user.id)
         notif = user.get("notifications_enabled", True)
+        practice = user.get("vocabulary_practice_mode", False)
         await callback.message.edit_text(
             "⚙️ <b>Settings</b>",
             parse_mode="HTML",
-            reply_markup=get_settings_keyboard(notif, callback.from_user.id)
+            reply_markup=get_settings_keyboard(notif, callback.from_user.id, practice)
         )
         await callback.answer()
     except Exception as e:
@@ -311,8 +350,23 @@ async def toggle_notifications(callback: CallbackQuery):
         await callback.answer("Error.", show_alert=True)
 
 
-@router.callback_query(F.data == "change_level")
-async def change_user_level(callback: CallbackQuery):
+@router.callback_query(F.data == "toggle_vocab_practice")
+async def toggle_vocab_practice(callback: CallbackQuery):
+    try:
+        new_val = await db.toggle_vocab_practice_mode(callback.from_user.id)
+        status = "ON 📚" if new_val else "OFF"
+        await callback.answer(f"Vocabulary Practice {status}", show_alert=False)
+        user = await db.get_or_create_user(callback.from_user.id)
+        notif = user.get("notifications_enabled", True)
+        await callback.message.edit_reply_markup(
+            reply_markup=get_settings_keyboard(notif, callback.from_user.id, new_val)
+        )
+    except Exception as e:
+        logger.error(f"Error toggling vocab practice: {e}")
+        await callback.answer("Error.", show_alert=True)
+
+
+
     await callback.message.edit_text(
         "<b>Select your new English level:</b>",
         reply_markup=get_level_keyboard(),
@@ -360,10 +414,11 @@ async def menu_persona_selected(callback: CallbackQuery, state: FSMContext):
 
         user = await _db.get_or_create_user(user_id)
         notif = user.get("notifications_enabled", True)
+        practice = user.get("vocabulary_practice_mode", False)
         await callback.message.edit_text(
             f"👤 Now talking to {display_name}\n\n⚙️ <b>Settings</b>",
             parse_mode="HTML",
-            reply_markup=get_settings_keyboard(notif, callback.from_user.id)
+            reply_markup=get_settings_keyboard(notif, callback.from_user.id, practice)
         )
         await callback.answer()
     except Exception as e:
@@ -536,10 +591,11 @@ async def back_to_settings(callback: CallbackQuery):
     try:
         user = await db.get_or_create_user(callback.from_user.id)
         notif = user.get("notifications_enabled", True)
+        practice = user.get("vocabulary_practice_mode", False)
         await callback.message.edit_text(
             "⚙️ <b>Settings</b>",
             parse_mode="HTML",
-            reply_markup=get_settings_keyboard(notif, callback.from_user.id)
+            reply_markup=get_settings_keyboard(notif, callback.from_user.id, practice)
         )
         await callback.answer()
     except Exception as e:
@@ -749,7 +805,9 @@ async def cq_show_vocab(callback: CallbackQuery):
     try:
         await _send_vocabulary(
             callback.from_user.id,
-            lambda text, **kwargs: callback.message.edit_text(text, **kwargs)
+            send_fn=None,
+            tab="active",
+            edit_msg=lambda text, **kw: callback.message.edit_text(text, **kw)
         )
         await callback.answer()
     except Exception as e:
@@ -757,7 +815,26 @@ async def cq_show_vocab(callback: CallbackQuery):
         await callback.answer("Error loading vocabulary.", show_alert=True)
 
 
-# ─── Translate / Original для How to use ──────────────────────────────────
+@router.callback_query(F.data.startswith("vocab_tab_"))
+async def cq_vocab_tab(callback: CallbackQuery):
+    try:
+        tab = callback.data.split("_")[2]
+        await _send_vocabulary(
+            callback.from_user.id,
+            send_fn=None,
+            tab=tab,
+            edit_msg=lambda text, **kw: callback.message.edit_text(text, **kw)
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in vocab_tab: {e}")
+        await callback.answer("Error.", show_alert=True)
+
+
+@router.message(Command("vocabulary"))
+async def cmd_vocabulary(message: Message):
+    await _send_vocabulary(message.from_user.id, send_fn=message.answer, tab="active")
+
 
 @router.callback_query(F.data.startswith("howto_translate_"))
 async def howto_translate(callback: CallbackQuery):
