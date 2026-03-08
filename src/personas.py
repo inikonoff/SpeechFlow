@@ -1,5 +1,5 @@
 """
-SpeechFlow AI — Personas
+SpeechFlow Pro — Personas
 Six characters, one small world.
 """
 
