@@ -438,8 +438,7 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             delay = _penfriend_typing_delay(chat_response)
             await message.bot.send_chat_action(user_id, "typing")
             await asyncio.sleep(delay)
-            safe_response = html.escape(chat_response)
-            sent = await message.answer(f"💬 {safe_response}", parse_mode="HTML")
+            sent = await message.answer(f"💬 {chat_response}", parse_mode="HTML")
             _originals_cache[sent.message_id] = chat_response
             await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
         else:
@@ -633,8 +632,8 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
                 await message.answer_voice(voice_file_out)
 
         # Текстовый ответ с кнопкой Translate
-        safe_response = html.escape(chat_response)
-        sent = await message.answer(f"💬 {safe_response}", parse_mode="HTML")
+        # Не экранируем — модель возвращает валидный HTML (bold для vocab)
+        sent = await message.answer(f"💬 {chat_response}", parse_mode="HTML")
         _originals_cache[sent.message_id] = chat_response
         await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
 
