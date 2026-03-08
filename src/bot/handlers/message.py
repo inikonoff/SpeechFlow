@@ -91,7 +91,7 @@ async def send_response_with_translate(
     extra_keyboard — дополнительные кнопки (Switch в Flow Mode).
     """
     if should_reply_voice:
-        voice_bytes = await groq_client.text_to_speech(chat_response, voice=voice)
+        voice_bytes = await groq_client.text_to_speech(re.sub(r'<[^>]+>', '', chat_response), voice=voice)
         if voice_bytes:
             voice_file = BufferedInputFile(voice_bytes, filename="response.wav")
             await message.answer_voice(voice_file)
@@ -324,7 +324,7 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
 
         # Приветствие голосом — только для Flow
         if active_mode_final != MODE_PENFRIEND:
-            voice_bytes = await groq_client.text_to_speech(greeting, voice=voice)
+            voice_bytes = await groq_client.text_to_speech(re.sub(r'<[^>]+>', '', greeting), voice=voice)
             if voice_bytes:
                 voice_file = BufferedInputFile(voice_bytes, filename="greeting.wav")
                 sent = await callback.message.answer_voice(
@@ -437,7 +437,7 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             penfriend_delay = _penfriend_typing_delay(chat_response)
         else:
             # Flow Mode — голос с caption и кнопками Text / Translate
-            voice_bytes = await groq_client.text_to_speech(chat_response, voice=voice)
+            voice_bytes = await groq_client.text_to_speech(re.sub(r'<[^>]+>', '', chat_response), voice=voice)
             if voice_bytes:
                 voice_file = BufferedInputFile(voice_bytes, filename="response.wav")
                 sent = await message.answer_voice(
@@ -628,7 +628,7 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
 
         # Голосовой ответ если нужен — без кнопок, просто аудио
         if should_reply_voice:
-            voice_bytes_out = await groq_client.text_to_speech(chat_response, voice=voice)
+            voice_bytes_out = await groq_client.text_to_speech(re.sub(r'<[^>]+>', '', chat_response), voice=voice)
             if voice_bytes_out:
                 voice_file_out = BufferedInputFile(voice_bytes_out, filename="response.wav")
                 await message.answer_voice(voice_file_out)
