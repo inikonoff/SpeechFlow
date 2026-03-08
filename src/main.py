@@ -135,7 +135,7 @@ async def lifespan(app: FastAPI):
     global polling_task, keep_alive_task
     scheduler_task = None
     
-    logger.info("🚀 Starting Speech Flow AI Bot...")
+    logger.info("🚀 Starting Speech Flow Pro Bot...")
     logger.info("=" * 50)
     
     temp_dir = getattr(settings, 'TEMP_DIR', '/tmp/speech_flow')
@@ -166,7 +166,7 @@ async def lifespan(app: FastAPI):
     
     yield
     
-    logger.info("🛑 Shutting down Speech Flow AI Bot...")
+    logger.info("🛑 Shutting down Speech Flow Pro Bot...")
     # Отменяем наш пинг при выключении
     if keep_alive_task and not keep_alive_task.done():
         keep_alive_task.cancel()
@@ -177,7 +177,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     lifespan=lifespan,
-    title="Speech Flow AI Bot",
+    title="Speech Flow Pro Bot",
     version="1.0.0",
     docs_url=None,
     redoc_url=None
@@ -192,7 +192,7 @@ async def root():
     uptime_seconds = int(time.time() - start_time)
     return {
         "status": "alive",
-        "service": "Speech Flow AI",
+        "service": "Speech Flow Pro",
         "version": "1.0.0",
         "uptime": str(timedelta(seconds=uptime_seconds)),
         "timestamp": datetime.utcnow().isoformat()
