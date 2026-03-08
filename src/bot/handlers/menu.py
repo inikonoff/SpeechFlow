@@ -378,44 +378,7 @@ async def change_persona(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("persona_"), FlowState.choosing_persona)
-async def menu_persona_selected(callback: CallbackQuery, state: FSMContext):
-    """Перехватывает persona_* когда пришли из Settings (from_settings=True)"""
-    try:
-        fsm_data = await state.get_data()
-        if not fsm_data.get("from_settings"):
-            return  # отдаём управление flow_persona_selected в message.py
 
-        from src.personas import get_all_personas, get_persona_display
-        from src.services.supabase_db import db as _db
-        persona_key = callback.data.split("_", 1)[1]
-        personas = get_all_personas()
-        if persona_key not in personas:
-            await callback.answer("Unknown persona.", show_alert=True)
-            return
-
-        user_id = callback.from_user.id
-        from src.personas import get_persona_voice
-        voice = get_persona_voice(persona_key)
-        await _db.update_user_persona(user_id, persona_key)
-        await _db.update_user_voice(user_id, voice)
-
-        display_name = get_persona_display(persona_key)
-        await state.clear()
-
-        user = await _db.get_or_create_user(user_id)
-        notif = user.get("notifications_enabled", True)
-        practice = user.get("vocabulary_practice_mode", False)
-        await callback.message.edit_text(
-            f"👤 Now talking to {display_name}\n\n⚙️ <b>Settings</b>",
-            parse_mode="HTML",
-            reply_markup=get_settings_keyboard(notif, callback.from_user.id, practice)
-        )
-        await callback.answer()
-    except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f"Error in menu_persona_selected: {e}")
-        await callback.answer("Something went wrong.", show_alert=True)
 
 
 @router.callback_query(F.data == "back_to_menu")
