@@ -86,17 +86,7 @@ async def cmd_stats(message: Message):
 
 
 
-@router.message(Command("voice"))
-async def cmd_voice(message: Message):
-    personas = get_all_personas()
-    builder = InlineKeyboardBuilder()
-    for key, name in personas.items():
-        builder.row(InlineKeyboardButton(text=name, callback_data=f"persona_{key}"))
-    await message.answer(
-        "🗣 <b>Choose your conversation partner:</b>",
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML"
-    )
+
 
 
 @router.message(Command("settings"))
@@ -366,16 +356,7 @@ async def toggle_vocab_practice(callback: CallbackQuery):
         await callback.answer("Error.", show_alert=True)
 
 
-@router.callback_query(F.data == "change_persona")
-async def change_persona(callback: CallbackQuery, state: FSMContext):
-    await state.update_data(from_settings=True)
-    await state.set_state(FlowState.choosing_persona)
-    await callback.message.edit_text(
-        "<b>Who would you like to talk to?</b>",
-        reply_markup=get_persona_keyboard(),
-        parse_mode="HTML"
-    )
-    await callback.answer()
+
 
 
 
