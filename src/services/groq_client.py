@@ -106,20 +106,20 @@ You are an elite ESL Professor with 15+ years of experience. Your goal is to ana
 - Vocabulary items: Rare synonyms, idiomatic expressions
 
 # OUTPUT FORMAT (JSON ONLY)
-{
+{{
   "corrected_sentence": "[Full corrected sentence - if perfect, return original]",
   "explanation": "[Level-appropriate explanation, max 2 sentences, focus on WHY. MUST be written entirely in Russian]",
   "vocabulary_items": [
-    {
+    {{
       "word_or_phrase": "...",
       "lemma": "...(base form, e.g. 'make a decision' not 'made a decision')",
       "translation": "...",
       "context_sentence": "...",
       "word_type": "word|phrase|phrasal_verb|collocation|grammar_pattern"
-    }
+    }}
   ],
   "error_category": "grammar|vocabulary|pronunciation|structure|style|none"
-}
+}}
 
 VOCABULARY RULES:
 - Only save meaningful vocabulary: collocations, phrasal verbs, idioms, grammar patterns, advanced words.
@@ -230,7 +230,8 @@ User Level: {level}"""
         history: Optional[List[Dict[str, str]]] = None,
         summary: Optional[str] = None,
         session_count: int = 0,
-        top_errors: Optional[List[str]] = None
+        top_errors: Optional[List[str]] = None,
+        extra_instruction: str = ""
     ) -> str:
         persona_prompt = get_persona_prompt(persona_key, session_count=session_count)
 
@@ -248,6 +249,9 @@ User Level: {level}"""
                 f"Occasionally use correct examples of these naturally in your own speech — "
                 f"no need to draw attention, just model the right form casually."
             )
+
+        if extra_instruction:
+            persona_prompt += f"\n\n{extra_instruction}"
 
         messages = [{"role": "system", "content": persona_prompt}]
         if history:
@@ -461,7 +465,7 @@ User Level: {level}"""
 
         async def _summarize(client):
             response = await client.chat.completions.create(
-                model="openai/gpt-oss-120b",
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
                 messages=[
                     {
                         "role": "system",
@@ -498,7 +502,7 @@ User Level: {level}"""
 
         async def _merge(client):
             response = await client.chat.completions.create(
-                model="openai/gpt-oss-120b",
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
                 messages=[
                     {
                         "role": "system",
