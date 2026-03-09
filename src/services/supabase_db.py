@@ -136,6 +136,84 @@ class SupabaseDB:
             logger.error(f"Error updating notifications: {e}")
             return False
 
+    async def get_admin_stats(self) -> Dict[str, Any]:
+        """Статистика для админ-панели."""
+        try:
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+
+            all_users = self.client.table("users").select("telegram_id, created_at, last_active, mode, persona").execute()
+            total = len(all_users.data)
+
+            new_today = sum(
+                1 for u in all_users.data
+                if u.get("created_at", "").startswith(today)
+            )
+            new_week = sum(
+                1 for u in all_users.data
+                if u.get("created_at", "") >= week_ago
+            )
+            active_week = sum(
+                1 for u in all_users.data
+                if u.get("last_active", "") >= week_ago
+            )
+
+            # Статистика по режимам
+            mode_counts = {}
+            for u in all_users.data:
+                mode = u.get("mode", "unknown")
+                mode_counts[mode] = mode_counts.get(mode, 0) + 1
+            mode_ranking = sorted(mode_counts.items(), key=lambda x: x[1], reverse=True)
+
+            # Статистика по персонажам
+            persona_counts = {}
+            for u in all_users.data:
+                persona = u.get("persona", "unknown")
+                persona_counts[persona] = persona_counts.get(persona, 0) + 1
+            top_personas = sorted(persona_counts.items(), key=lambda x: x[1], reverse=True)
+
+            return {
+                "total": total,
+                "new_today": new_today,
+                "new_week": new_week,
+                "active_week": active_week,
+                "mode_ranking": mode_ranking,
+                "top_personas": top_personas,
+            }
+        except Exception as e:
+            logger.error(f"Error in get_admin_stats: {e}")
+            return {"total": 0, "new_today": 0, "new_week": 0, "active_week": 0,
+                    "mode_ranking": [], "top_personas": []}
+
+    async def get_all_users(self) -> List[Dict[str, Any]]:
+        """Возвращает всех пользователей."""
+        try:
+            response = self.client.table("users").select("*").execute()
+            return response.data or []
+        except Exception as e:
+            logger.error(f"Error in get_all_users: {e}")
+            return []
+
+    async def get_user_card(self, telegram_id: int) -> Dict[str, Any]:
+        """
+        Возвращает карточку пользователя для админ-панели.
+        Использует get_user_stats и добавляет недостающие поля.
+        """
+        try:
+            stats = await self.get_user_stats(telegram_id)
+            user = stats.get("user", {})
+            
+            return {
+                "user": user,
+                "msgs_total": stats.get("msgs_this_week", 0) + stats.get("msgs_prev_week", 0),
+                "msgs_week": stats.get("msgs_this_week", 0),
+                "vocab_count": stats.get("vocabulary_count", 0),
+                "mastered_count": stats.get("mastered_count", 0),
+            }
+        except Exception as e:
+            logger.error(f"Error in get_user_card for {telegram_id}: {e}")
+            return {}
+
     async def increment_user_metrics(self, telegram_id: int, tokens_used: int = 0) -> None:
         try:
             user = await self.get_or_create_user(telegram_id)
