@@ -551,7 +551,7 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
 
         # Vocab reminder каждые 4 сообщения
         remind_counter = await db.increment_vocab_remind_counter(user_id)
-        if remind_counter >= 4:
+        if remind_counter >= 2:
             await db.reset_vocab_remind_counter(user_id)
             word_to_remind = await db.get_word_for_reminder(user_id)
             if word_to_remind:
