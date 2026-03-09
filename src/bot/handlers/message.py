@@ -97,6 +97,7 @@ async def _check_voice_limit(user_id: int, user: Dict[str, Any], is_admin: bool)
     return True, warning
 
 
+async def send_response_with_translate(
     message: Message,
     chat_response: str,
     should_reply_voice: bool,
