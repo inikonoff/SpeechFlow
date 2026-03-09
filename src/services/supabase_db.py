@@ -44,8 +44,6 @@ class SupabaseDB:
                 "free_messages_used": 0,
                 "notifications_enabled": True,
                 "vocabulary_remind_counter": 0,
-                "daily_voice_used": 0,
-                "daily_voice_reset_date": datetime.now(timezone.utc).date().isoformat(),
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
 
@@ -66,6 +64,44 @@ class SupabaseDB:
         except Exception as e:
             logger.error(f"Error updating user voice: {e}")
             return False
+
+    async def check_and_increment_voice(
+        self, telegram_id: int, daily_limit: int
+    ) -> tuple[bool, int, int]:
+        """
+        Проверяет и инкрементирует счётчик исходящих TTS-ответов.
+
+        Возвращает (allowed, used_after, daily_limit):
+          allowed  — True если TTS разрешён (лимит не исчерпан)
+          used_after — сколько голосовых использовано после этого вызова
+          daily_limit — суточный лимит для данного тарифа
+        """
+        try:
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            user = await self.get_or_create_user(telegram_id)
+
+            reset_date = user.get("daily_voice_reset_date", "")
+            used = user.get("daily_voice_used", 0)
+
+            # Новый день — обнуляем счётчик
+            if reset_date != today:
+                used = 0
+
+            if used >= daily_limit:
+                return False, used, daily_limit
+
+            new_used = used + 1
+            self.client.table("users").update({
+                "daily_voice_used": new_used,
+                "daily_voice_reset_date": today,
+            }).eq("telegram_id", telegram_id).execute()
+
+            return True, new_used, daily_limit
+
+        except Exception as e:
+            logger.error(f"Error in check_and_increment_voice: {e}")
+            # При ошибке разрешаем — чтобы не ломать UX
+            return True, 0, daily_limit
 
     async def update_user_level(self, telegram_id: int, level: str) -> bool:
         try:
@@ -145,51 +181,6 @@ class SupabaseDB:
         except Exception as e:
             logger.error(f"Error resetting vocab remind counter: {e}")
 
-    # ─── Голосовой дневной лимит ──────────────────────────────────────────
-
-    FREE_DAILY_VOICE = 2  # лимит для не-админов
-
-    async def check_and_increment_daily_voice(self, telegram_id: int) -> dict:
-        """
-        Проверяет дневной лимит голосовых сообщений.
-        Возвращает:
-          {"allowed": True/False, "used": N, "limit": N, "is_last": True/False}
-        Автоматически сбрасывает счётчик если новый день.
-        """
-        try:
-            user = await self.get_or_create_user(telegram_id)
-            today = datetime.now(timezone.utc).date().isoformat()
-
-            reset_date = user.get("daily_voice_reset_date", "")
-            used = user.get("daily_voice_used", 0)
-
-            # Новый день — сбрасываем
-            if reset_date != today:
-                used = 0
-                self.client.table("users").update({
-                    "daily_voice_used": 0,
-                    "daily_voice_reset_date": today
-                }).eq("telegram_id", telegram_id).execute()
-
-            limit = self.FREE_DAILY_VOICE
-
-            if used >= limit:
-                return {"allowed": False, "used": used, "limit": limit, "is_last": False}
-
-            # Разрешаем и инкрементируем
-            new_used = used + 1
-            self.client.table("users").update({
-                "daily_voice_used": new_used,
-                "daily_voice_reset_date": today
-            }).eq("telegram_id", telegram_id).execute()
-
-            is_last = new_used >= limit
-            return {"allowed": True, "used": new_used, "limit": limit, "is_last": is_last}
-
-        except Exception as e:
-            logger.error(f"Error in check_and_increment_daily_voice: {e}")
-            return {"allowed": True, "used": 0, "limit": self.FREE_DAILY_VOICE, "is_last": False}
-
     async def increment_session_count(self, telegram_id: int) -> int:
         """Увеличивает счётчик завершённых сессий. Вызывается при прощании. Возвращает новое значение."""
         try:
@@ -227,31 +218,14 @@ class SupabaseDB:
 
     # ─── Словарь ───────────────────────────────────────────────────────────
 
-    # ─── Vocabulary Engine ─────────────────────────────────────────────────
-
     async def add_to_vocabulary(self, telegram_id: int, word_data: Dict[str, Any]) -> bool:
-        """Добавляет слово. Пропускает дубликаты по lemma."""
         try:
-            lemma = word_data.get("lemma") or word_data.get("word_or_phrase", "")
-            # Дедупликация по lemma
-            existing = (self.client.table("vocabulary")
-                        .select("id")
-                        .eq("user_id", telegram_id)
-                        .ilike("lemma", lemma)
-                        .execute())
-            if existing.data:
-                return False  # уже есть
-
             vocab_entry = {
                 "user_id": telegram_id,
                 "word_or_phrase": word_data.get("word_or_phrase", ""),
-                "lemma": lemma.lower(),
                 "translation": word_data.get("translation", ""),
                 "context_sentence": word_data.get("context_sentence", ""),
-                "word_type": word_data.get("word_type", "word"),
                 "mastery_score": 0,
-                "times_reminded": 0,
-                "times_used": 0,
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
             response = self.client.table("vocabulary").insert(vocab_entry).execute()
@@ -260,22 +234,14 @@ class SupabaseDB:
             logger.error(f"Error adding vocabulary: {e}")
             return False
 
-    async def get_user_vocabulary(self, telegram_id: int, tab: str = "all", limit: int = 50) -> List[Dict[str, Any]]:
-        """
-        tab: 'active' | 'all' | 'difficult' | 'mastered'
-        """
+    async def get_user_vocabulary(self, telegram_id: int, limit: int = 50) -> List[Dict[str, Any]]:
         try:
-            q = self.client.table("vocabulary").select("*").eq("user_id", telegram_id)
-            if tab == "active":
-                week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-                q = q.gte("last_reminded_at", week_ago).lt("mastery_score", 5)
-            elif tab == "difficult":
-                q = q.gt("times_reminded", 5).lt("mastery_score", 3)
-            elif tab == "mastered":
-                q = q.gte("mastery_score", 5)
-            else:  # all
-                q = q.lt("mastery_score", 5)
-            response = q.order("created_at", desc=True).limit(limit).execute()
+            response = (self.client.table("vocabulary")
+                        .select("*")
+                        .eq("user_id", telegram_id)
+                        .order("created_at", desc=True)
+                        .limit(limit)
+                        .execute())
             return response.data or []
         except Exception as e:
             logger.error(f"Error getting vocabulary: {e}")
@@ -283,85 +249,27 @@ class SupabaseDB:
 
     async def get_word_for_reminder(self, telegram_id: int) -> Optional[Dict[str, Any]]:
         """
-        Priority score: (5 - mastery) * 2 + hours_since_reminder + (5 если ни разу не напоминали).
-        Выбирает топ-5 кандидатов и берёт лучшего по priority.
+        Возвращает слово для напоминания:
+        приоритет — mastery_score < 5, давно не напоминали (или ни разу).
         """
         try:
             response = (self.client.table("vocabulary")
                         .select("*")
                         .eq("user_id", telegram_id)
                         .lt("mastery_score", 5)
+                        .order("last_reminded_at", desc=False, nullsfirst=True)
+                        .limit(1)
                         .execute())
-            if not response.data:
-                return None
-
-            now = datetime.now(timezone.utc)
-
-            def priority(w: dict) -> float:
-                score = (5 - (w.get("mastery_score") or 0)) * 2
-                last = w.get("last_reminded_at")
-                if last:
-                    last_dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
-                    hours = (now - last_dt).total_seconds() / 3600
-                    score += min(hours, 72)  # cap at 72h чтобы не было бесконечного приоритета
-                else:
-                    score += 5  # бонус за "ни разу не напоминали"
-                return score
-
-            candidates = sorted(response.data, key=priority, reverse=True)
-            return candidates[0]
+            return response.data[0] if response.data else None
         except Exception as e:
             logger.error(f"Error getting word for reminder: {e}")
             return None
 
-    async def get_words_for_practice(self, telegram_id: int, count: int = 3) -> List[Dict[str, Any]]:
-        """Возвращает N слов для Practice Mode по priority score."""
-        try:
-            response = (self.client.table("vocabulary")
-                        .select("*")
-                        .eq("user_id", telegram_id)
-                        .lt("mastery_score", 5)
-                        .execute())
-            if not response.data:
-                return []
-
-            now = datetime.now(timezone.utc)
-
-            def priority(w: dict) -> float:
-                score = (5 - (w.get("mastery_score") or 0)) * 2
-                last = w.get("last_reminded_at")
-                if last:
-                    hours = (now - datetime.fromisoformat(last.replace("Z", "+00:00"))).total_seconds() / 3600
-                    score += min(hours, 72)
-                else:
-                    score += 5
-                return score
-
-            candidates = sorted(response.data, key=priority, reverse=True)
-            return candidates[:count]
-        except Exception as e:
-            logger.error(f"Error getting words for practice: {e}")
-            return []
-
-    def get_reminder_interval(self, mastery_score: int) -> int:
-        """Spaced repetition: интервал напоминания в сообщениях."""
-        import random
-        intervals = {0: (2, 3), 1: (3, 4), 2: (4, 5), 3: (5, 7), 4: (7, 10)}
-        lo, hi = intervals.get(mastery_score, (2, 5))
-        return random.randint(lo, hi)
-
     async def mark_word_reminded(self, word_id: str) -> bool:
+        """Обновляет last_reminded_at для слова"""
         try:
-            current = (self.client.table("vocabulary")
-                       .select("times_reminded")
-                       .eq("id", word_id)
-                       .execute())
-            times = (current.data[0].get("times_reminded") or 0) + 1 if current.data else 1
             response = (self.client.table("vocabulary")
-                        .update({
-                            "last_reminded_at": datetime.now(timezone.utc).isoformat(),
-                            "times_reminded": times
-                        })
+                        .update({"last_reminded_at": datetime.now(timezone.utc).isoformat()})
                         .eq("id", word_id)
                         .execute())
             return len(response.data) > 0
@@ -369,70 +277,51 @@ class SupabaseDB:
             logger.error(f"Error marking word reminded: {e}")
             return False
 
-    async def mark_word_used(self, word_id: str) -> int:
-        """Увеличивает mastery и times_used. Возвращает новый mastery."""
+    async def increase_mastery(self, word_id: str) -> int:
+        """Увеличивает mastery_score на 1. Возвращает новое значение."""
         try:
             current = (self.client.table("vocabulary")
-                       .select("mastery_score, times_used")
+                       .select("mastery_score")
                        .eq("id", word_id)
                        .execute())
             if not current.data:
                 return 0
-            new_score = min((current.data[0].get("mastery_score") or 0) + 1, 5)
-            new_used = (current.data[0].get("times_used") or 0) + 1
-            self.client.table("vocabulary").update({
-                "mastery_score": new_score,
-                "times_used": new_used,
-                "last_reminded_at": datetime.now(timezone.utc).isoformat()
-            }).eq("id", word_id).execute()
+            new_score = min(current.data[0]["mastery_score"] + 1, 10)
+            self.client.table("vocabulary").update(
+                {"mastery_score": new_score}
+            ).eq("id", word_id).execute()
             return new_score
         except Exception as e:
-            logger.error(f"Error marking word used: {e}")
+            logger.error(f"Error increasing mastery: {e}")
             return 0
 
-    async def set_word_mastered(self, word_id: str) -> bool:
-        """Пользователь вручную отмечает слово как освоенное."""
+    async def find_word_in_text(self, telegram_id: int, text: str) -> Optional[Dict[str, Any]]:
+        """
+        Проверяет использовал ли пользователь напомянутое слово в тексте.
+        Возвращает запись словаря если нашёл.
+        """
         try:
-            self.client.table("vocabulary").update({"mastery_score": 5}).eq("id", word_id).execute()
-            return True
-        except Exception as e:
-            logger.error(f"Error setting word mastered: {e}")
-            return False
-
-    async def get_recently_reminded_words(self, telegram_id: int) -> List[Dict[str, Any]]:
-        """Слова напомянутые за последние 30 минут — для LLM detection."""
-        try:
-            since = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+            # Берём слова которые напоминали за последние 10 минут
+            since = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
             response = (self.client.table("vocabulary")
                         .select("*")
                         .eq("user_id", telegram_id)
                         .gte("last_reminded_at", since)
                         .lt("mastery_score", 5)
                         .execute())
-            return response.data or []
-        except Exception as e:
-            logger.error(f"Error getting recently reminded: {e}")
-            return []
 
-    async def get_vocab_practice_mode(self, telegram_id: int) -> bool:
-        try:
-            user = await self.get_or_create_user(telegram_id)
-            return user.get("vocabulary_practice_mode", False)
-        except Exception:
-            return False
+            if not response.data:
+                return None
 
-    async def toggle_vocab_practice_mode(self, telegram_id: int) -> bool:
-        """Переключает practice mode. Возвращает новое значение."""
-        try:
-            user = await self.get_or_create_user(telegram_id)
-            new_val = not user.get("vocabulary_practice_mode", False)
-            self.client.table("users").update(
-                {"vocabulary_practice_mode": new_val}
-            ).eq("telegram_id", telegram_id).execute()
-            return new_val
+            text_lower = text.lower()
+            for word in response.data:
+                phrase = word.get("word_or_phrase", "").lower()
+                if phrase and phrase in text_lower:
+                    return word
+            return None
         except Exception as e:
-            logger.error(f"Error toggling practice mode: {e}")
-            return False
+            logger.error(f"Error finding word in text: {e}")
+            return None
 
     # ─── Ошибки ────────────────────────────────────────────────────────────
 
@@ -551,93 +440,6 @@ class SupabaseDB:
 
     async def is_admin(self, telegram_id: int) -> bool:
         return telegram_id in ADMIN_IDS
-
-    # ─── Админ-методы ──────────────────────────────────────────────────────
-
-    async def get_admin_stats(self) -> Dict[str, Any]:
-        """Общая статистика для админ-панели."""
-        try:
-            today = datetime.now(timezone.utc).date().isoformat()
-            week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-
-            total = self.client.table("users").select("id", count="exact").execute()
-            new_today = self.client.table("users").select("id", count="exact").gte("created_at", today).execute()
-            new_week = self.client.table("users").select("id", count="exact").gte("created_at", week_ago).execute()
-            active_week = self.client.table("users").select("id", count="exact").gte("last_active", week_ago).execute()
-
-            # Топ персонажей и рейтинг режимов из текущих значений
-            all_users = self.client.table("users").select("persona, mode").execute()
-            persona_counts: Dict[str, int] = {}
-            mode_counts: Dict[str, int] = {}
-            for u in (all_users.data or []):
-                p = u.get("persona") or "unknown"
-                m = u.get("mode") or "unknown"
-                persona_counts[p] = persona_counts.get(p, 0) + 1
-                mode_counts[m] = mode_counts.get(m, 0) + 1
-
-            top_personas = sorted(persona_counts.items(), key=lambda x: x[1], reverse=True)[:3]
-            mode_ranking = sorted(mode_counts.items(), key=lambda x: x[1], reverse=True)
-
-            return {
-                "total": total.count or 0,
-                "new_today": new_today.count or 0,
-                "new_week": new_week.count or 0,
-                "active_week": active_week.count or 0,
-                "top_personas": top_personas,
-                "mode_ranking": mode_ranking,
-            }
-        except Exception as e:
-            logger.error(f"Error getting admin stats: {e}")
-            return {"total": 0, "new_today": 0, "new_week": 0, "active_week": 0,
-                    "top_personas": [], "mode_ranking": []}
-
-    async def get_all_users(self) -> List[Dict[str, Any]]:
-        """Список всех пользователей для отображения в админке."""
-        try:
-            response = self.client.table("users").select(
-                "telegram_id, username, level, mode, persona, "
-                "streak_days, last_active, created_at"
-            ).order("last_active", desc=True).execute()
-            return response.data or []
-        except Exception as e:
-            logger.error(f"Error getting all users: {e}")
-            return []
-
-    async def get_user_card(self, telegram_id: int) -> Dict[str, Any]:
-        """Полная карточка пользователя для админки."""
-        try:
-            user = await self.get_or_create_user(telegram_id)
-            week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-
-            msgs_total = self.client.table("messages").select("id", count="exact")\
-                .eq("user_id", telegram_id).eq("role", "user").execute()
-            msgs_week = self.client.table("messages").select("id", count="exact")\
-                .eq("user_id", telegram_id).eq("role", "user")\
-                .gte("created_at", week_ago).execute()
-            vocab = self.client.table("vocabulary").select("id, mastery_score")\
-                .eq("user_id", telegram_id).execute()
-
-            mastered = sum(1 for v in (vocab.data or []) if v.get("mastery_score", 0) >= 5)
-
-            return {
-                "user": user,
-                "msgs_total": msgs_total.count or 0,
-                "msgs_week": msgs_week.count or 0,
-                "vocab_count": len(vocab.data or []),
-                "mastered_count": mastered,
-            }
-        except Exception as e:
-            logger.error(f"Error getting user card: {e}")
-            return {}
-
-    async def get_all_user_ids(self) -> List[int]:
-        """Все telegram_id для broadcast."""
-        try:
-            response = self.client.table("users").select("telegram_id").execute()
-            return [r["telegram_id"] for r in (response.data or [])]
-        except Exception as e:
-            logger.error(f"Error getting all user ids: {e}")
-            return []
 
     # ─── Уведомления ───────────────────────────────────────────────────────
 
