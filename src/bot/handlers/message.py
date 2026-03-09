@@ -535,6 +535,20 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
                     parse_mode="HTML"
                 )
 
+        # Vocab Practice Mode — подменяем ответ персонажа если включён
+        if user.get("vocabulary_practice_mode", False):
+            practice_words = await db.get_user_vocabulary(user_id, tab="active", limit=10)
+            if practice_words:
+                persona_key = user.get("persona", "mrs_smith")
+                persona_prompt = get_persona_tutor_prompt(persona_key)
+                practice_response = await groq_client.generate_practice_response(
+                    persona_prompt=persona_prompt,
+                    history=history,
+                    words=practice_words,
+                )
+                if practice_response:
+                    chat_response = practice_response
+
         # Vocab reminder каждые 4 сообщения
         remind_counter = await db.increment_vocab_remind_counter(user_id)
         if remind_counter >= 4:
