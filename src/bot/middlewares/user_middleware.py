@@ -25,6 +25,21 @@ _message_timestamps: Dict[int, list] = defaultdict(list)
 _cooldowns: Dict[int, float] = {}
 _warned: Dict[int, bool] = {}
 
+_last_cleanup = 0.0
+
+def _periodic_cleanup(now: float):
+    global _last_cleanup
+    if now - _last_cleanup > 3600:  # Clean memory every hour
+        cutoff = now - RATE_LIMIT_WINDOW
+        for uid in list(_message_timestamps.keys()):
+            _message_timestamps[uid] = [t for t in _message_timestamps[uid] if t > cutoff]
+            if not _message_timestamps[uid]:
+                del _message_timestamps[uid]
+        for uid in list(_cooldowns.keys()):
+            if _cooldowns[uid] < now:
+                del _cooldowns[uid]
+                _warned.pop(uid, None)
+        _last_cleanup = now
 
 def _clean_old(user_id: int, now: float) -> None:
     cutoff = now - RATE_LIMIT_WINDOW
@@ -32,21 +47,11 @@ def _clean_old(user_id: int, now: float) -> None:
         t for t in _message_timestamps[user_id] if t > cutoff
     ]
 
-
 def _count_recent(user_id: int, now: float) -> int:
     _clean_old(user_id, now)
     return len(_message_timestamps[user_id])
 
-
 class UserMiddleware(BaseMiddleware):
-    """
-    Загрузка пользователя + защита от спама.
-    - Rate limit: 20 сообщений / 60 сек → cooldown 60 сек
-    - Предупреждение при 15+ сообщениях
-    - Обрезка текста до 2000 символов
-    - Админы: мягкий лимит 100, без cooldown
-    """
-
     async def __call__(
         self,
         handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
@@ -54,7 +59,6 @@ class UserMiddleware(BaseMiddleware):
         data: Dict[str, Any]
     ) -> Any:
 
-        # ── Извлекаем user_id ─────────────────────────────────────────────
         user_id = None
         if hasattr(event, 'from_user') and event.from_user:
             user_id = event.from_user.id
@@ -68,7 +72,6 @@ class UserMiddleware(BaseMiddleware):
 
         is_admin = user_id in ADMIN_IDS
 
-        # ── Загружаем пользователя ────────────────────────────────────────
         try:
             user = await db.get_or_create_user(user_id)
             data["user"] = user
@@ -78,7 +81,6 @@ class UserMiddleware(BaseMiddleware):
             data["user"] = {}
             data["is_admin"] = False
 
-        # ── Защита только для Message ─────────────────────────────────────
         message: Message | None = None
         if isinstance(event, Message):
             message = event
@@ -89,9 +91,10 @@ class UserMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         now = time.monotonic()
+        _periodic_cleanup(now)
+        
         limit = RATE_LIMIT_MAX_ADMIN if is_admin else RATE_LIMIT_MAX
 
-        # ── Cooldown ──────────────────────────────────────────────────────
         if not is_admin and user_id in _cooldowns:
             if now < _cooldowns[user_id]:
                 remaining = int(_cooldowns[user_id] - now)
@@ -107,7 +110,6 @@ class UserMiddleware(BaseMiddleware):
                 _warned.pop(user_id, None)
                 _message_timestamps[user_id].clear()
 
-        # ── Rate limit ────────────────────────────────────────────────────
         _message_timestamps[user_id].append(now)
         count = _count_recent(user_id, now)
 
@@ -128,7 +130,6 @@ class UserMiddleware(BaseMiddleware):
                 "You're sending messages very fast — slow down a little so I can keep up."
             )
 
-        # ── Обрезаем огромный текст ───────────────────────────────────────
         if message.text and len(message.text) > MAX_MESSAGE_LENGTH:
             original_len = len(message.text)
             message.text = message.text[:MAX_MESSAGE_LENGTH] + " [...]"
