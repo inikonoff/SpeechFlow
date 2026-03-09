@@ -1,6 +1,7 @@
 import logging
 import html
 import asyncio
+import re
 from aiogram import Router, F
 from aiogram.types import Message, BufferedInputFile, CallbackQuery
 from aiogram.fsm.context import FSMContext
@@ -8,7 +9,7 @@ from aiogram.fsm.state import State, StatesGroup
 from src.bot.handlers.states import FlowState
 from typing import Dict, Any
 
-from src.config import settings, ADMIN_IDS, get_daily_voice_limit
+from src.config import settings, ADMIN_IDS
 from src.services.supabase_db import db
 from src.services.groq_client import groq_client
 from src.utils.audio import save_voice_file, cleanup_file, read_file_bytes
@@ -34,6 +35,23 @@ from src.modes import (
 )
 
 router = Router()
+
+
+def _process_vocab_tags(text: str) -> tuple[str, str]:
+    """
+    Обрабатывает теги [VOCAB:word] в ответе персонажа.
+
+    Возвращает (clean_text, display_text):
+      clean_text   — текст без тегов (для TTS и кэша)
+      display_text — текст с <b>word</b> для отображения пользователю
+    """
+    # Извлекаем все слова из тегов для подсветки
+    words = re.findall(r'\[VOCAB:([^\]]+)\]', text)
+    # Убираем теги для чистого текста (TTS)
+    clean_text = re.sub(r'\[VOCAB:([^\]]+)\]', r'\1', text)
+    # Для отображения — жирный
+    display_text = re.sub(r'\[VOCAB:([^\]]+)\]', r'<b>\1</b>', text)
+    return clean_text, display_text
 logger = logging.getLogger(__name__)
 
 # Кеш оригинальных текстов для кнопки Original: {message_id: original_text}
@@ -70,31 +88,6 @@ async def transcribe_voice_with_groq(voice_file_bytes: bytes) -> str:
     except Exception as e:
         logger.error(f"Error transcribing voice: {e}")
         raise
-
-
-async def _check_voice_limit(user_id: int, user: Dict[str, Any], is_admin: bool) -> tuple[bool, str]:
-    """
-    Проверяет лимит TTS для пользователя.
-    Возвращает (allowed, warning_text).
-    warning_text непустой если это последний доступный голосовой сегодня.
-    """
-    if is_admin:
-        return True, ""
-
-    subscription_plan = user.get("subscription_plan", "standard")
-    daily_limit = get_daily_voice_limit(subscription_plan)
-
-    allowed, used, limit = await db.check_and_increment_voice(user_id, daily_limit)
-
-    if not allowed:
-        return False, ""
-
-    # Предупреждение если это последний голосовой
-    warning = ""
-    if used >= limit:
-        warning = f"🔔 That was your last voice message for today ({limit}/{limit}). Text is still unlimited."
-
-    return True, warning
 
 
 async def send_response_with_translate(
@@ -340,28 +333,18 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
             await callback.message.answer(f"🎙 Flow Mode — {persona_display}", parse_mode="HTML")
 
         # Приветствие — голос с caption (имя персонажа)
-        is_admin = callback.from_user.id in ADMIN_IDS
-        voice_allowed, voice_warning = await _check_voice_limit(user_id, user, is_admin)
-        if voice_allowed:
-            voice_bytes = await groq_client.text_to_speech(greeting, voice=voice)
-            if voice_bytes:
-                voice_file = BufferedInputFile(voice_bytes, filename="greeting.wav")
-                sent = await callback.message.answer_voice(
-                    voice_file,
-                    caption=persona_display,
-                    reply_markup=get_flow_voice_keyboard(0)
-                )
-                _originals_cache[sent.message_id] = greeting
-                await sent.edit_reply_markup(
-                    reply_markup=get_flow_voice_keyboard(sent.message_id)
-                )
-                if voice_warning:
-                    await callback.message.answer(voice_warning)
-        else:
-            limit = get_daily_voice_limit(user.get("subscription_plan", "standard"))
-            await callback.message.answer(
-                f"🔇 You've used all {limit} voice messages for today.\n"
-                f"Text is still unlimited — switch to Tutor or PenFriend mode."
+        voice_bytes = await groq_client.text_to_speech(greeting, voice=voice)
+        if voice_bytes:
+            voice_file = BufferedInputFile(voice_bytes, filename="greeting.wav")
+            sent = await callback.message.answer_voice(
+                voice_file,
+                caption=persona_display,
+                reply_markup=get_flow_voice_keyboard(0)  # placeholder id
+            )
+            # Обновляем keyboard с реальным message_id
+            _originals_cache[sent.message_id] = greeting
+            await sent.edit_reply_markup(
+                reply_markup=get_flow_voice_keyboard(sent.message_id)
             )
 
         await callback.answer()
@@ -432,45 +415,34 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
         )
         await db.save_message(user_id, "assistant", chat_response)
 
+        # Обрабатываем [VOCAB:word] теги
+        chat_response_clean, _ = _process_vocab_tags(chat_response)
+
         persona_display = get_persona_display(persona_key)
 
         if active_mode == MODE_PENFRIEND:
             # PenFriend — только текст с имитацией набора
-            delay = _penfriend_typing_delay(chat_response)
+            delay = _penfriend_typing_delay(chat_response_clean)
             await message.bot.send_chat_action(user_id, "typing")
             await asyncio.sleep(delay)
-            safe_response = html.escape(chat_response)
-            sent = await message.answer(f"💬 {safe_response}", parse_mode="HTML")
-            _originals_cache[sent.message_id] = chat_response
+            display_safe = re.sub(r'\[VOCAB:([^\]]+)\]', lambda m: f'<b>{html.escape(m.group(1))}</b>', chat_response)
+            sent = await message.answer(f"💬 {display_safe}", parse_mode="HTML")
+            _originals_cache[sent.message_id] = chat_response_clean
             await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
         else:
             # Flow Mode — голос с caption и кнопками Text / Translate
-            is_admin = user_id in ADMIN_IDS
-            voice_allowed, voice_warning = await _check_voice_limit(user_id, user, is_admin)
-            if voice_allowed:
-                voice_bytes = await groq_client.text_to_speech(chat_response, voice=voice)
-                if voice_bytes:
-                    voice_file = BufferedInputFile(voice_bytes, filename="response.wav")
-                    sent = await message.answer_voice(
-                        voice_file,
-                        caption=persona_display,
-                        reply_markup=get_flow_voice_keyboard(0)
-                    )
-                    _originals_cache[sent.message_id] = chat_response
-                    await sent.edit_reply_markup(
-                        reply_markup=get_flow_voice_keyboard(sent.message_id)
-                    )
-                    if voice_warning:
-                        await message.answer(voice_warning)
-            else:
-                limit = get_daily_voice_limit(user.get("subscription_plan", "standard"))
-                safe_response = html.escape(chat_response)
-                sent = await message.answer(
-                    f"🔇 Voice limit reached ({limit}/day).\n\n💬 {safe_response}",
-                    parse_mode="HTML"
+            voice_bytes = await groq_client.text_to_speech(chat_response_clean, voice=voice)
+            if voice_bytes:
+                voice_file = BufferedInputFile(voice_bytes, filename="response.wav")
+                sent = await message.answer_voice(
+                    voice_file,
+                    caption=persona_display,
+                    reply_markup=get_flow_voice_keyboard(0)
                 )
-                _originals_cache[sent.message_id] = chat_response
-                await sent.edit_reply_markup(reply_markup=get_flow_voice_keyboard(sent.message_id))
+                _originals_cache[sent.message_id] = chat_response_clean
+                await sent.edit_reply_markup(
+                    reply_markup=get_flow_voice_keyboard(sent.message_id)
+                )
 
         # Если прощание — саммаризация в фоне + инкремент сессии
         if is_farewell:
@@ -594,29 +566,24 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
         if not chat_response:
             chat_response = "Sorry, I couldn't formulate a response."
 
+        # Обрабатываем [VOCAB:word] теги
+        chat_response_clean, chat_response_display = _process_vocab_tags(chat_response)
+
         voice = user.get("voice") or settings.TTS_VOICE
 
         # Голосовой ответ если нужен — без кнопок, просто аудио
         if should_reply_voice:
-            voice_allowed, voice_warning = await _check_voice_limit(user_id, user, is_admin)
-            if voice_allowed:
-                voice_bytes_out = await groq_client.text_to_speech(chat_response, voice=voice)
-                if voice_bytes_out:
-                    voice_file_out = BufferedInputFile(voice_bytes_out, filename="response.wav")
-                    await message.answer_voice(voice_file_out)
-                if voice_warning:
-                    await message.answer(voice_warning)
-            else:
-                limit = get_daily_voice_limit(user.get("subscription_plan", "standard"))
-                await message.answer(
-                    f"🔇 Voice limit reached ({limit}/day). Text replies continue below."
-                )
-                should_reply_voice = False
+            voice_bytes_out = await groq_client.text_to_speech(chat_response_clean, voice=voice)
+            if voice_bytes_out:
+                voice_file_out = BufferedInputFile(voice_bytes_out, filename="response.wav")
+                await message.answer_voice(voice_file_out)
 
         # Текстовый ответ с кнопкой Translate
-        safe_response = html.escape(chat_response)
-        sent = await message.answer(f"💬 {safe_response}", parse_mode="HTML")
-        _originals_cache[sent.message_id] = chat_response
+        safe_response = html.escape(chat_response_clean)
+        # Восстанавливаем <b> теги после escape
+        display_safe = re.sub(r'\[VOCAB:([^\]]+)\]', lambda m: f'<b>{html.escape(m.group(1))}</b>', chat_response)
+        sent = await message.answer(f"💬 {display_safe}", parse_mode="HTML")
+        _originals_cache[sent.message_id] = chat_response_clean
         await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
 
         if is_farewell:
