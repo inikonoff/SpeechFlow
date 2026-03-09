@@ -130,7 +130,7 @@ class SupabaseDB:
 
     async def get_users_for_notification(self) -> List[Dict[str, Any]]:
         try:
-            cutoff = (datetime.utcnow() - timedelta(hours=48)).isoformat()
+            cutoff = (datetime.utcnow() - timedelta(hours=23.5)).isoformat()
             response = (self.client.table("users")
                         .select("*")
                         .eq("notifications_enabled", True)
