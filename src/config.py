@@ -53,3 +53,18 @@ def get_admin_ids() -> List[int]:
 
 
 ADMIN_IDS = get_admin_ids()
+
+
+# ─── Тарифные планы и лимиты голосовых ────────────────────────────────────────
+SUBSCRIPTION_PLANS = ("standard", "plus", "pro")
+
+# Лимит TTS-ответов бота в сутки (исходящий голос)
+DAILY_VOICE_LIMITS: dict = {
+    "standard": 5,
+    "plus": 10,
+    "pro": 20,
+}
+
+def get_daily_voice_limit(subscription_plan: str) -> int:
+    """Возвращает суточный лимит TTS для данного тарифа."""
+    return DAILY_VOICE_LIMITS.get(subscription_plan, DAILY_VOICE_LIMITS["standard"])
