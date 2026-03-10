@@ -123,12 +123,17 @@ async def run_summarization(user_id: int) -> None:
                 return
 
             existing_summary = await db.get_latest_summary(user_id)
-            new_summary = await groq_client.summarize_conversation(messages, existing_summary)
+            result = await groq_client.summarize_conversation(messages, existing_summary)
+            # summarize_conversation returns (summary_text, topics_text)
+            if isinstance(result, tuple):
+                new_summary, new_topics = result
+            else:
+                new_summary, new_topics = result, ""
 
             if not new_summary:
                 return
 
-            await db.save_summary(user_id, new_summary, is_merged=False)
+            await db.save_summary(user_id, new_summary, is_merged=False, topics=new_topics or None)
             logger.info(f"✅ Summary saved for user {user_id}")
 
             unmerged_count = await db.count_unmerged_summaries(user_id)
@@ -402,7 +407,7 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
 
         if message.voice:
             is_voice_input = True
-            await message.bot.send_chat_action(user_id, "typing")
+            await message.bot.send_chat_action(user_id, "record_voice")
             voice_file = await message.bot.get_file(message.voice.file_id)
             voice_bytes = await message.bot.download_file(voice_file.file_path)
             user_text = await transcribe_voice_with_groq(voice_bytes.read())
@@ -430,7 +435,8 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
         farewell_task = asyncio.create_task(groq_client.detect_farewell(user_text))
         history_task = asyncio.create_task(db.get_history(user_id, limit=settings.CONTEXT_WINDOW))
         summary_task = asyncio.create_task(db.get_latest_summary(user_id))
-        history, is_farewell, summary = await asyncio.gather(history_task, farewell_task, summary_task)
+        topics_task = asyncio.create_task(db.get_topics_to_discuss(user_id))
+        history, is_farewell, summary, topics = await asyncio.gather(history_task, farewell_task, summary_task, topics_task)
 
         user_level = user.get("level", settings.DEFAULT_USER_LEVEL)
         should_reply_voice = (
@@ -438,15 +444,15 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
             (settings.VOICE_RESPONSE_MODE == "mirror" and is_voice_input)
         )
 
-        action = "record_voice" if should_reply_voice else "typing"
-        await message.bot.send_chat_action(user_id, action)
-
+        # Show "typing" while correction + response generate in parallel
+        await message.bot.send_chat_action(user_id, "typing")
         chat_response, analysis_data = await groq_client.process_user_message(
             telegram_id=user_id,
             user_text=user_text,
             user_level=user_level,
             history=history,
-            summary=summary
+            summary=summary,
+            topics=topics
         )
 
         await db.save_message(user_id, "assistant", chat_response)
@@ -496,31 +502,46 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
 
         await db.increment_user_metrics(user_id, tokens_used=0)
 
-        safe_corrected = html.escape(analysis_data.get('corrected_sentence', user_text))
-        safe_explanation = html.escape(analysis_data.get('explanation', ''))
-        analysis_text = f"✅ <b>Correct</b>\n{safe_corrected}\n\n💡 <b>Why</b>\n{safe_explanation}"
-        if analysis_data.get('vocabulary_items'):
-            analysis_text += "\n\n📚 <i>New words added to your vocabulary</i>"
-
-        await message.answer(analysis_text, parse_mode="HTML")
-
         if not chat_response:
             chat_response = "Sorry, I couldn't formulate a response."
 
         chat_response_clean, chat_response_display = _process_vocab_tags(chat_response)
         voice = user.get("voice") or settings.TTS_VOICE
+        persona_display = get_persona_display(user.get("persona", "mrs_smith"))
 
         if should_reply_voice:
+            # Switch to record_voice indicator before TTS
+            await message.bot.send_chat_action(user_id, "record_voice")
             voice_bytes_out = await groq_client.text_to_speech(chat_response_clean, voice=voice)
             if voice_bytes_out:
                 voice_file_out = BufferedInputFile(voice_bytes_out, filename="response.wav")
-                await message.answer_voice(voice_file_out)
+                sent_voice = await message.answer_voice(
+                    voice_file_out,
+                    caption=persona_display,
+                    reply_markup=get_flow_voice_keyboard(0)
+                )
+                _cache_original(sent_voice.message_id, chat_response_clean)
+                await sent_voice.edit_reply_markup(reply_markup=get_flow_voice_keyboard(sent_voice.message_id))
+        else:
+            # Text response
+            display_safe = re.sub(r'\[VOCAB:([^\]]+)\]', lambda m: f'<b>{html.escape(m.group(1))}</b>', chat_response)
+            sent = await message.answer(f"💬 {display_safe}", parse_mode="HTML")
+            _cache_original(sent.message_id, chat_response_clean)
+            await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
 
-        safe_response = html.escape(chat_response_clean)
-        display_safe = re.sub(r'\[VOCAB:([^\]]+)\]', lambda m: f'<b>{html.escape(m.group(1))}</b>', chat_response)
-        sent = await message.answer(f"💬 {display_safe}", parse_mode="HTML")
-        _cache_original(sent.message_id, chat_response_clean)
-        await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
+        # Analysis block: send AFTER the response, only if there's a real correction
+        safe_corrected = html.escape(analysis_data.get('corrected_sentence', ''))
+        safe_explanation = html.escape(analysis_data.get('explanation', ''))
+        has_correction = bool(safe_corrected and safe_corrected.strip() != html.escape(user_text).strip())
+        if has_correction or safe_explanation:
+            analysis_lines = []
+            if has_correction:
+                analysis_lines.append(f"✍️ <b>{safe_corrected}</b>")
+            if safe_explanation:
+                analysis_lines.append(f"💡 {safe_explanation}")
+            if analysis_data.get('vocabulary_items'):
+                analysis_lines.append("📚 <i>New words added to your vocabulary</i>")
+            await message.answer("\n\n".join(analysis_lines), parse_mode="HTML")
 
         if is_farewell:
             asyncio.create_task(run_summarization(user_id))
