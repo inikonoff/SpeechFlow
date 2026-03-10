@@ -273,22 +273,34 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
 
         await db.save_message(user_id, "assistant", greeting)
 
+        active_mode = user.get("mode", MODE_FLOW)
         persona_display = get_persona_display(persona_key)
+
         if switch_context:
             await callback.message.answer(f"↩ Switched to {persona_display}", parse_mode="HTML")
+        elif active_mode == MODE_PENFRIEND:
+            await callback.message.answer(f"✉️ PenFriend — {persona_display}", parse_mode="HTML")
         else:
             await callback.message.answer(f"🎙 Flow Mode — {persona_display}", parse_mode="HTML")
 
-        voice_bytes = await groq_client.text_to_speech(greeting, voice=voice)
-        if voice_bytes:
-            voice_file = BufferedInputFile(voice_bytes, filename="greeting.wav")
-            sent = await callback.message.answer_voice(
-                voice_file,
-                caption=persona_display,
-                reply_markup=get_flow_voice_keyboard(0)
-            )
+        if active_mode == MODE_PENFRIEND:
+            # PenFriend — текстовое приветствие без голоса
+            safe_greeting = html.escape(greeting)
+            sent = await callback.message.answer(f"💬 {safe_greeting}", parse_mode="HTML")
             _cache_original(sent.message_id, greeting)
-            await sent.edit_reply_markup(reply_markup=get_flow_voice_keyboard(sent.message_id))
+            await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
+        else:
+            # Flow — голосовое приветствие
+            voice_bytes = await groq_client.text_to_speech(greeting, voice=voice)
+            if voice_bytes:
+                voice_file = BufferedInputFile(voice_bytes, filename="greeting.wav")
+                sent = await callback.message.answer_voice(
+                    voice_file,
+                    caption=persona_display,
+                    reply_markup=get_flow_voice_keyboard(0)
+                )
+                _cache_original(sent.message_id, greeting)
+                await sent.edit_reply_markup(reply_markup=get_flow_voice_keyboard(sent.message_id))
 
         await callback.answer()
 
@@ -313,6 +325,13 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             await message.answer(
                 "✉️ PenFriend is text-only.\n"
                 "Try typing what you wanted to say — it is good writing practice too."
+            )
+            return
+
+        if active_mode == MODE_FLOW and message.text:
+            await message.answer(
+                "🎙 Flow Mode is voice-only.\n"
+                "Hold the microphone button and speak."
             )
             return
 
