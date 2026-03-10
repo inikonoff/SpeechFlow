@@ -87,11 +87,10 @@ async def cmd_settings(message: Message):
     user = await db.get_or_create_user(message.from_user.id)
     notif = user.get("notifications_enabled", True)
     practice = user.get("vocab_practice_enabled", False)
-    mistakes = user.get("mistakes_practice_enabled", False)
     await message.answer(
         "⚙️ <b>Settings</b>",
         parse_mode="HTML",
-        reply_markup=get_settings_keyboard(notif, message.from_user.id, practice, mistakes)
+        reply_markup=get_settings_keyboard(notif, message.from_user.id, practice)
     )
 
 @router.message(Command("author"))
@@ -283,11 +282,10 @@ async def show_settings(callback: CallbackQuery):
         user = await db.get_or_create_user(callback.from_user.id)
         notif = user.get("notifications_enabled", True)
         practice = user.get("vocab_practice_enabled", False)
-        mistakes = user.get("mistakes_practice_enabled", False)
         await callback.message.edit_text(
             "⚙️ <b>Settings</b>",
             parse_mode="HTML",
-            reply_markup=get_settings_keyboard(notif, callback.from_user.id, practice, mistakes)
+            reply_markup=get_settings_keyboard(notif, callback.from_user.id, practice)
         )
         await callback.answer()
     except Exception as e:
@@ -302,11 +300,11 @@ async def toggle_notifications(callback: CallbackQuery):
         new_value = not current
         await db.update_notifications(callback.from_user.id, new_value)
         practice = user.get("vocab_practice_enabled", False)
-        mistakes = user.get("mistakes_practice_enabled", False)
         status = "ON 🔔" if new_value else "OFF 🔕"
         await callback.answer(f"Notifications {status}", show_alert=False)
+
         await callback.message.edit_reply_markup(
-            reply_markup=get_settings_keyboard(new_value, callback.from_user.id, practice, mistakes)
+            reply_markup=get_settings_keyboard(new_value, callback.from_user.id, practice)
         )
     except Exception as e:
         logger.error(f"Error toggling notifications: {e}")
@@ -320,28 +318,11 @@ async def toggle_vocab_practice(callback: CallbackQuery):
         await callback.answer(f"Vocabulary Practice {status}", show_alert=False)
         user = await db.get_or_create_user(callback.from_user.id)
         notif = user.get("notifications_enabled", True)
-        mistakes = user.get("mistakes_practice_enabled", False)
         await callback.message.edit_reply_markup(
-            reply_markup=get_settings_keyboard(notif, callback.from_user.id, new_val, mistakes)
+            reply_markup=get_settings_keyboard(notif, callback.from_user.id, new_val)
         )
     except Exception as e:
         logger.error(f"Error toggling vocab practice: {e}")
-        await callback.answer("Error.", show_alert=True)
-
-@router.callback_query(F.data == "toggle_mistakes_practice")
-async def toggle_mistakes_practice(callback: CallbackQuery):
-    try:
-        new_val = await db.toggle_mistakes_practice_mode(callback.from_user.id)
-        status = "ON 🔴" if new_val else "OFF"
-        await callback.answer(f"Mistakes Practice {status}", show_alert=False)
-        user = await db.get_or_create_user(callback.from_user.id)
-        notif = user.get("notifications_enabled", True)
-        practice = user.get("vocab_practice_enabled", False)
-        await callback.message.edit_reply_markup(
-            reply_markup=get_settings_keyboard(notif, callback.from_user.id, practice, new_val)
-        )
-    except Exception as e:
-        logger.error(f"Error toggling mistakes practice: {e}")
         await callback.answer("Error.", show_alert=True)
 
 @router.callback_query(F.data == "change_level")
@@ -507,11 +488,10 @@ async def back_to_settings(callback: CallbackQuery):
         user = await db.get_or_create_user(callback.from_user.id)
         notif = user.get("notifications_enabled", True)
         practice = user.get("vocab_practice_enabled", False)
-        mistakes = user.get("mistakes_practice_enabled", False)
         await callback.message.edit_text(
             "⚙️ <b>Settings</b>",
             parse_mode="HTML",
-            reply_markup=get_settings_keyboard(notif, callback.from_user.id, practice, mistakes)
+            reply_markup=get_settings_keyboard(notif, callback.from_user.id, practice)
         )
         await callback.answer()
     except Exception as e:
