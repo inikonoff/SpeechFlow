@@ -206,18 +206,21 @@ async def deactivate_penfriend(message: Message, state: FSMContext):
 
 @router.message(F.text == "↩ Switch")
 @router.message(F.text == "↩ Switch")
+@router.message(F.text == "↩ Switch")
 async def flow_switch_reply(message: Message, state: FSMContext):
     try:
         user_id = message.from_user.id
+        
+        # Определяем текущий режим из FSM, а не из БД
+        fsm_data = await state.get_data()
+        current_mode = fsm_data.get("active_mode", MODE_FLOW)  # ← берём из FSM
+        
         history = await db.get_history(user_id, limit=settings.CONTEXT_WINDOW)
         context_text = " | ".join([
             f"{m['role']}: {m['content']}" for m in history
         ]) if history else ""
 
-        user = await db.get_or_create_user(user_id)          # ← ДОБАВИТЬ
-        current_mode = user.get("mode", MODE_FLOW)            # ← ДОБАВИТЬ
-
-        await state.update_data(switch_context=context_text, active_mode=current_mode)  # ← изменить
+        await state.update_data(switch_context=context_text, active_mode=current_mode)
         await state.set_state(FlowState.choosing_persona)
 
         await message.answer("Who would you like to talk to next?", reply_markup=get_persona_keyboard())
