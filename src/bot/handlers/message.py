@@ -160,7 +160,6 @@ async def run_merge_summaries(user_id: int) -> None:
 
 @router.message(F.text == "🎙 Flow")
 async def activate_flow(message: Message, state: FSMContext):
-    await db.update_mode(message.from_user.id, MODE_FLOW)
     await state.set_state(FlowState.choosing_persona)
     await message.answer("Who would you like to talk to?", reply_markup=get_persona_keyboard())
 
@@ -274,34 +273,22 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
 
         await db.save_message(user_id, "assistant", greeting)
 
-        active_mode = user.get("mode", MODE_FLOW)
         persona_display = get_persona_display(persona_key)
-
         if switch_context:
             await callback.message.answer(f"↩ Switched to {persona_display}", parse_mode="HTML")
-        elif active_mode == MODE_PENFRIEND:
-            await callback.message.answer(f"✉️ PenFriend — {persona_display}", parse_mode="HTML")
         else:
             await callback.message.answer(f"🎙 Flow Mode — {persona_display}", parse_mode="HTML")
 
-        if active_mode == MODE_PENFRIEND:
-            # PenFriend — текстовое приветствие без голоса
-            safe_greeting = html.escape(greeting)
-            sent = await callback.message.answer(f"💬 {safe_greeting}", parse_mode="HTML")
+        voice_bytes = await groq_client.text_to_speech(greeting, voice=voice)
+        if voice_bytes:
+            voice_file = BufferedInputFile(voice_bytes, filename="greeting.wav")
+            sent = await callback.message.answer_voice(
+                voice_file,
+                caption=persona_display,
+                reply_markup=get_flow_voice_keyboard(0)
+            )
             _cache_original(sent.message_id, greeting)
-            await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
-        else:
-            # Flow — голосовое приветствие
-            voice_bytes = await groq_client.text_to_speech(greeting, voice=voice)
-            if voice_bytes:
-                voice_file = BufferedInputFile(voice_bytes, filename="greeting.wav")
-                sent = await callback.message.answer_voice(
-                    voice_file,
-                    caption=persona_display,
-                    reply_markup=get_flow_voice_keyboard(0)
-                )
-                _cache_original(sent.message_id, greeting)
-                await sent.edit_reply_markup(reply_markup=get_flow_voice_keyboard(sent.message_id))
+            await sent.edit_reply_markup(reply_markup=get_flow_voice_keyboard(sent.message_id))
 
         await callback.answer()
 
@@ -326,13 +313,6 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             await message.answer(
                 "✉️ PenFriend is text-only.\n"
                 "Try typing what you wanted to say — it is good writing practice too."
-            )
-            return
-
-        if active_mode == MODE_FLOW and message.text:
-            await message.answer(
-                "🎙 Flow Mode is voice-only.\n"
-                "Hold the microphone button and speak."
             )
             return
 
@@ -628,8 +608,8 @@ async def flow_show_text(callback: CallbackQuery):
             return
 
         safe_text = html.escape(original)
-        await callback.message.reply(
-            f"💬 {safe_text}",
+        await callback.message.edit_caption(
+            caption=f"💬 {safe_text}",
             parse_mode="HTML",
             reply_markup=get_flow_voice_text_keyboard(message_id)
         )
@@ -651,8 +631,8 @@ async def flow_translate(callback: CallbackQuery):
         translation = await groq_client.translate_text(original)
         safe_translation = html.escape(translation)
 
-        await callback.message.reply(
-            f"🌐 {safe_translation}",
+        await callback.message.edit_caption(
+            caption=f"🌐 {safe_translation}",
             parse_mode="HTML",
             reply_markup=get_flow_voice_translate_keyboard(message_id)
         )
@@ -671,11 +651,11 @@ async def flow_original(callback: CallbackQuery):
             await callback.answer("Text not available.", show_alert=True)
             return
 
-        safe_text = html.escape(original)
-        await callback.message.edit_text(
-            f"💬 {safe_text}",
-            parse_mode="HTML",
-            reply_markup=get_flow_voice_text_keyboard(message_id)
+        persona_display = callback.message.caption.split("\n")[0] if callback.message.caption else ""
+
+        await callback.message.edit_caption(
+            caption=persona_display,
+            reply_markup=get_flow_voice_keyboard(message_id)
         )
         await callback.answer()
     except Exception as e:
