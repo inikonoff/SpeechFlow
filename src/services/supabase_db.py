@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 class SupabaseDB:
     def __init__(self):
         self.client: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+        self._vocab_remind_counters: Dict[int, int] = {}  # in-memory, no DB column needed
 
     async def ping(self) -> bool:
         try:
@@ -292,13 +293,33 @@ class SupabaseDB:
             logger.error(f"Error getting summary: {e}")
             return None
 
-    async def save_summary(self, user_id: int, content: str, is_merged: bool = False):
+    async def get_topics_to_discuss(self, user_id: int) -> Optional[str]:
+        """Возвращает topics_to_discuss из последнего merged summary."""
         try:
-            self.client.table("summaries").insert({
+            response = (self.client.table("summaries")
+                        .select("topics_to_discuss")
+                        .eq("user_id", user_id)
+                        .eq("is_merged", True)
+                        .order("created_at", desc=True)
+                        .limit(1)
+                        .execute())
+            if response.data:
+                return response.data[0].get("topics_to_discuss") or None
+            return None
+        except Exception as e:
+            logger.error(f"Error getting topics: {e}")
+            return None
+
+    async def save_summary(self, user_id: int, content: str, is_merged: bool = False, topics: Optional[str] = None):
+        try:
+            data = {
                 "user_id": user_id,
                 "content": content,
-                "is_merged": is_merged
-            }).execute()
+                "is_merged": is_merged,
+            }
+            if topics:
+                data["topics_to_discuss"] = topics
+            self.client.table("summaries").insert(data).execute()
         except Exception as e:
             logger.error(f"Error saving summary: {e}")
 
@@ -348,8 +369,8 @@ class SupabaseDB:
             msgs_this = self.client.table("messages").select("id", count="exact").eq("user_id", telegram_id).gte("created_at", start_of_week).execute()
             msgs_prev = self.client.table("messages").select("id", count="exact").eq("user_id", telegram_id).gte("created_at", prev_week_start).lt("created_at", start_of_week).execute()
             
-            errors_this = self.client.table("errors").select("category").eq("user_id", telegram_id).gte("created_at", start_of_week).execute()
-            errors_prev = self.client.table("errors").select("category").eq("user_id", telegram_id).gte("created_at", prev_week_start).lt("created_at", start_of_week).execute()
+            errors_this = self.client.table("error_logs").select("category").eq("user_id", telegram_id).gte("created_at", start_of_week).execute()
+            errors_prev = self.client.table("error_logs").select("category").eq("user_id", telegram_id).gte("created_at", prev_week_start).lt("created_at", start_of_week).execute()
             
             error_stats_week = {}
             for e in (errors_this.data or []):
@@ -383,7 +404,7 @@ class SupabaseDB:
                 "category": error_data.get("category", "other"),
                 "mistake_text": error_data.get("mistake_text", "")
             }
-            self.client.table("errors").insert(data).execute()
+            self.client.table("error_logs").insert(data).execute()
             return True
         except Exception as e:
             logger.error(f"Error logging error: {e}")
@@ -391,7 +412,7 @@ class SupabaseDB:
 
     async def get_top_error_categories(self, user_id: int, limit: int = 2) -> List[str]:
         try:
-            response = self.client.table("errors").select("category").eq("user_id", user_id).execute()
+            response = self.client.table("error_logs").select("category").eq("user_id", user_id).execute()
             if not response.data: return []
             
             counts = {}
@@ -481,17 +502,14 @@ class SupabaseDB:
             return 0
 
     async def increment_vocab_remind_counter(self, telegram_id: int) -> int:
-        try:
-            user = await self.get_or_create_user(telegram_id)
-            new_val = user.get("vocab_remind_counter", 0) + 1
-            await self.update_user(telegram_id, {"vocab_remind_counter": new_val})
-            return new_val
-        except Exception as e:
-            logger.error(f"Error incrementing vocab remind counter: {e}")
-            return 0
+        """In-memory counter — no DB column needed."""
+        val = self._vocab_remind_counters.get(telegram_id, 0) + 1
+        self._vocab_remind_counters[telegram_id] = val
+        return val
 
     async def reset_vocab_remind_counter(self, telegram_id: int) -> bool:
-        return await self.update_user(telegram_id, {"vocab_remind_counter": 0})
+        self._vocab_remind_counters[telegram_id] = 0
+        return True
 
     async def get_word_for_reminder(self, user_id: int) -> Optional[Dict[str, Any]]:
         try:
