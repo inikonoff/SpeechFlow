@@ -5,7 +5,6 @@ import re
 from aiogram import Router, F
 from aiogram.types import Message, BufferedInputFile, CallbackQuery
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
 from src.bot.handlers.states import FlowState
 from typing import Dict, Any
 
@@ -35,14 +34,15 @@ from src.modes import (
 )
 
 router = Router()
-
-def _process_vocab_tags(text: str) -> tuple[str, str]:
-    words = re.findall(r'\[VOCAB:([^\]]+)\]', text)
-    clean_text = re.sub(r'\[VOCAB:([^\]]+)\]', r'\1', text)
-    display_text = re.sub(r'\[VOCAB:([^\]]+)\]', r'<b>\1</b>', text)
-    return clean_text, display_text
-
 logger = logging.getLogger(__name__)
+
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+def _process_mistake_tags(text: str) -> tuple[str, str]:
+    """[MISTAKE:word] → clean text и display text с жирным."""
+    clean_text = re.sub(r'\[MISTAKE:([^\]]+)\]', r'\1', text)
+    display_text = re.sub(r'\[MISTAKE:([^\]]+)\]', r'<b>\1</b>', text)
+    return clean_text, display_text
 
 _originals_cache: Dict[int, str] = {}
 SUMMARY_MERGE_THRESHOLD = 4
@@ -69,41 +69,8 @@ async def transcribe_voice_with_groq(voice_file_bytes: bytes) -> str:
         logger.error(f"Error transcribing voice: {e}")
         raise
 
-async def send_response_with_translate(
-    message: Message,
-    chat_response: str,
-    should_reply_voice: bool,
-    voice: str,
-    analysis_text: str = None,
-    extra_keyboard=None
-):
-    safe_response = html.escape(chat_response)
+# ─── Summarization ────────────────────────────────────────────────────────────
 
-    if should_reply_voice:
-        voice_bytes = await groq_client.text_to_speech(chat_response, voice=voice)
-        if voice_bytes:
-            voice_file = BufferedInputFile(voice_bytes, filename="response.wav")
-            await message.answer_voice(voice_file)
-
-    text_body = f"💬 {safe_response}"
-    if analysis_text and not should_reply_voice:
-        text_body = f"{text_body}\n\n{analysis_text}"
-
-    sent = await message.answer(text_body, parse_mode="HTML")
-    _cache_original(sent.message_id, chat_response)
-
-    if extra_keyboard:
-        from aiogram.utils.keyboard import InlineKeyboardBuilder
-        from aiogram.types import InlineKeyboardButton
-        builder = InlineKeyboardBuilder()
-        builder.row(InlineKeyboardButton(text="🌐 Translate", callback_data=f"translate_{sent.message_id}"))
-        for row in extra_keyboard.inline_keyboard:
-            builder.row(*row)
-        await sent.edit_reply_markup(reply_markup=builder.as_markup())
-    else:
-        await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
-
-# Lock to prevent overlapping summarizations for the same user
 _summarization_locks: Dict[int, asyncio.Lock] = {}
 
 def _get_summary_lock(user_id: int) -> asyncio.Lock:
@@ -114,32 +81,25 @@ def _get_summary_lock(user_id: int) -> asyncio.Lock:
 async def run_summarization(user_id: int) -> None:
     lock = _get_summary_lock(user_id)
     if lock.locked():
-        return # Skip if already summarizing
-    
+        return
     async with lock:
         try:
             messages = await db.get_messages_for_summary(user_id, limit=30)
             if not messages:
                 return
-
             existing_summary = await db.get_latest_summary(user_id)
             result = await groq_client.summarize_conversation(messages, existing_summary)
-            # summarize_conversation returns (summary_text, topics_text)
             if isinstance(result, tuple):
                 new_summary, new_topics = result
             else:
                 new_summary, new_topics = result, ""
-
             if not new_summary:
                 return
-
             await db.save_summary(user_id, new_summary, is_merged=False, topics=new_topics or None)
             logger.info(f"✅ Summary saved for user {user_id}")
-
             unmerged_count = await db.count_unmerged_summaries(user_id)
             if unmerged_count >= SUMMARY_MERGE_THRESHOLD:
                 await run_merge_summaries(user_id)
-
         except Exception as e:
             logger.error(f"Error in summarization for user {user_id}: {e}")
 
@@ -148,27 +108,25 @@ async def run_merge_summaries(user_id: int) -> None:
         unmerged = await db.get_unmerged_summaries(user_id)
         if len(unmerged) < SUMMARY_MERGE_THRESHOLD:
             return
-
         contents = [s["content"] for s in unmerged]
         merged_content = await groq_client.merge_summaries(contents)
-
         if not merged_content:
             return
-
         await db.save_summary(user_id, merged_content, is_merged=True)
         ids = [s["id"] for s in unmerged]
         await db.mark_summaries_as_merged(user_id, ids)
         logger.info(f"✅ Summaries merged for user {user_id}: {len(unmerged)} → 1")
-
     except Exception as e:
         logger.error(f"Error merging summaries for user {user_id}: {e}")
 
+# ─── Mode activation ──────────────────────────────────────────────────────────
+
 @router.message(F.text == "🎙 Flow")
 async def activate_flow(message: Message, state: FSMContext):
+    await state.update_data(active_mode=MODE_FLOW)
     await state.set_state(FlowState.choosing_persona)
-    await state.update_data(active_mode=MODE_FLOW)  # ← ДОБАВИТЬ
     await message.answer("Who would you like to talk to?", reply_markup=get_persona_keyboard())
-    
+
 @router.message(F.text == "⏹ Stop Flow")
 async def deactivate_flow(message: Message, state: FSMContext):
     await state.clear()
@@ -190,31 +148,27 @@ async def deactivate_tutor(message: Message, state: FSMContext):
 
 @router.message(F.text == "✉️ PenFriend")
 async def activate_penfriend(message: Message, state: FSMContext):
-    await state.set_state(FlowState.choosing_persona)
-    await state.update_data(active_mode=MODE_PENFRIEND)  # ← ДОБАВИТЬ
     await db.update_mode(message.from_user.id, MODE_PENFRIEND)
+    await state.update_data(active_mode=MODE_PENFRIEND)
+    await state.set_state(FlowState.choosing_persona)
     await message.answer(
         "✉️ <b>PenFriend Mode</b>\n\nWho would you like to write to?",
         parse_mode="HTML",
         reply_markup=get_persona_keyboard()
     )
-    
+
 @router.message(F.text == "⏹ Stop PenFriend")
 async def deactivate_penfriend(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("⏹ PenFriend Mode off", reply_markup=get_mode_keyboard())
 
 @router.message(F.text == "↩ Switch")
-@router.message(F.text == "↩ Switch")
-@router.message(F.text == "↩ Switch")
 async def flow_switch_reply(message: Message, state: FSMContext):
     try:
         user_id = message.from_user.id
-        
-        # Определяем текущий режим из FSM, а не из БД
         fsm_data = await state.get_data()
-        current_mode = fsm_data.get("active_mode", MODE_FLOW)  # ← берём из FSM
-        
+        current_mode = fsm_data.get("active_mode", MODE_FLOW)  # берём из FSM, не из БД
+
         history = await db.get_history(user_id, limit=settings.CONTEXT_WINDOW)
         context_text = " | ".join([
             f"{m['role']}: {m['content']}" for m in history
@@ -222,12 +176,13 @@ async def flow_switch_reply(message: Message, state: FSMContext):
 
         await state.update_data(switch_context=context_text, active_mode=current_mode)
         await state.set_state(FlowState.choosing_persona)
-
         await message.answer("Who would you like to talk to next?", reply_markup=get_persona_keyboard())
     except Exception as e:
         logger.error(f"Error in flow switch reply: {e}")
         await message.answer("Something went wrong. Try again.")
-        
+
+# ─── Persona selection ────────────────────────────────────────────────────────
+
 @router.callback_query(F.data.startswith("persona_"), FlowState.choosing_persona)
 async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
     try:
@@ -238,23 +193,21 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
         fsm_data = await state.get_data()
         switch_context = fsm_data.get("switch_context", "")
         from_settings = fsm_data.get("from_settings", False)
-        user = await db.get_or_create_user(user_id)
+        active_mode = fsm_data.get("active_mode", MODE_FLOW)  # всегда из FSM
 
         await db.update_user_persona(user_id, persona_key)
         await db.update_user_voice(user_id, voice)
 
         if from_settings:
-            from src.personas import get_all_personas
             display_name = get_persona_display(persona_key)
             await state.clear()
             from src.bot.keyboards import get_settings_keyboard
             user = await db.get_or_create_user(user_id)
             notif = user.get("notifications_enabled", True)
-            practice = user.get("vocab_practice_enabled", False)
             await callback.message.edit_text(
                 f"👤 Now talking to {display_name}.\n\n⚙️ <b>Settings</b>",
                 parse_mode="HTML",
-                reply_markup=get_settings_keyboard(notif, user_id, practice)
+                reply_markup=get_settings_keyboard(notif, user_id)
             )
             await callback.answer()
             return
@@ -263,7 +216,7 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
             persona_key=persona_key,
             voice=voice,
             switch_context="",
-            active_mode = fsm_data.get("active_mode", MODE_FLOW)
+            active_mode=active_mode,
         )
         await state.set_state(FlowState.active)
 
@@ -286,28 +239,18 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
             )
 
         await db.save_message(user_id, "assistant", greeting)
-
         persona_display = get_persona_display(persona_key)
-        active_mode = fsm_data.get("active_mode", MODE_FLOW)
 
-        # Правильная reply-клавиатура и подпись в зависимости от режима
         if active_mode == MODE_PENFRIEND:
             mode_keyboard = get_penfriend_keyboard()
-            if switch_context:
-                mode_label = f"↩ Switched to {persona_display}"
-            else:
-                mode_label = f"✉️ PenFriend Mode — {persona_display}"
+            mode_label = f"↩ Switched to {persona_display}" if switch_context else f"✉️ PenFriend Mode — {persona_display}"
         else:
             mode_keyboard = get_flow_stop_keyboard()
-            if switch_context:
-                mode_label = f"↩ Switched to {persona_display}"
-            else:
-                mode_label = f"🎙 Flow Mode — {persona_display}"
+            mode_label = f"↩ Switched to {persona_display}" if switch_context else f"🎙 Flow Mode — {persona_display}"
 
         await callback.message.answer(mode_label, parse_mode="HTML", reply_markup=mode_keyboard)
 
         if active_mode != MODE_PENFRIEND:
-            # В PenFriend голосовые ответы бота не отправляются
             voice_bytes = await groq_client.text_to_speech(greeting, voice=voice)
             if voice_bytes:
                 voice_file = BufferedInputFile(voice_bytes, filename="greeting.wav")
@@ -319,9 +262,7 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
                 _cache_original(sent.message_id, greeting)
                 await sent.edit_reply_markup(reply_markup=get_flow_voice_keyboard(sent.message_id))
         else:
-            # PenFriend — текстовое приветствие
-            import html as _html
-            safe_greeting = _html.escape(greeting)
+            safe_greeting = html.escape(greeting)
             sent = await callback.message.answer(f"💬 {safe_greeting}", parse_mode="HTML")
             _cache_original(sent.message_id, greeting)
             await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
@@ -331,6 +272,8 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
     except Exception as e:
         logger.error(f"Error in flow persona selection: {e}")
         await callback.answer("Something went wrong.", show_alert=True)
+
+# ─── Flow / PenFriend message handler ────────────────────────────────────────
 
 @router.message(FlowState.active)
 async def handle_flow_message(message: Message, state: FSMContext, user: Dict[str, Any] = None):
@@ -366,38 +309,62 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             return
 
         user_level = user.get("level", settings.DEFAULT_USER_LEVEL)
-
         await db.save_message(user_id, "user", user_text)
 
         farewell_task = asyncio.create_task(groq_client.detect_farewell(user_text))
         history_task = asyncio.create_task(db.get_history(user_id, limit=settings.CONTEXT_WINDOW))
         summary_task = asyncio.create_task(db.get_latest_summary(user_id))
         errors_task = asyncio.create_task(db.get_top_error_categories(user_id, limit=2))
+        practice_error_task = asyncio.create_task(db.get_error_for_practice(user_id))
 
-        history, summary, is_farewell, top_errors = await asyncio.gather(
-            history_task, summary_task, farewell_task, errors_task
+        history, summary, is_farewell, top_errors, practice_error = await asyncio.gather(
+            history_task, summary_task, farewell_task, errors_task, practice_error_task
         )
 
         await message.bot.send_chat_action(user_id, "record_voice")
+
+        # Mistakes practice: передаём одну ошибку в промпт — модель вплетает правильную форму
+        extra_instruction = ""
+        if practice_error:
+            cat = practice_error.get("category", "")
+            corrected = practice_error.get("corrected_text", "")
+            if corrected:
+                extra_instruction = (
+                    f"# MISTAKES PRACTICE\n"
+                    f"The user struggles with: {cat}.\n"
+                    f"Example of their mistake corrected: \"{corrected}\"\n"
+                    f"Naturally use the correct form of this pattern in your response. "
+                    f"Wrap the corrected form in [MISTAKE:...] tags so it can be highlighted. "
+                    f"Example: [MISTAKE:I have been waiting] for hours. "
+                    f"Do NOT announce this. Just model it naturally. One instance only."
+                )
+
         chat_response = await groq_client.generate_flow_response(
             text=user_text,
             persona_key=persona_key,
             history=history,
             summary=summary,
             session_count=user.get("session_count", 0),
-            top_errors=top_errors
+            top_errors=top_errors,
+            extra_instruction=extra_instruction
         )
-        await db.save_message(user_id, "assistant", chat_response)
 
-        chat_response_clean, _ = _process_vocab_tags(chat_response)
+        # Детектим правильное употребление — увеличиваем mastery ошибки
+        if practice_error and practice_error.get("corrected_text"):
+            asyncio.create_task(
+                _check_and_update_error_mastery(user_id, user_text, practice_error)
+            )
+
+        chat_response_clean, chat_response_display = _process_mistake_tags(chat_response)
+        await db.save_message(user_id, "assistant", chat_response_clean)
+
         persona_display = get_persona_display(persona_key)
 
         if active_mode == MODE_PENFRIEND:
             delay = _penfriend_typing_delay(chat_response_clean)
             await message.bot.send_chat_action(user_id, "typing")
             await asyncio.sleep(delay)
-            display_safe = re.sub(r'\[VOCAB:([^\]]+)\]', lambda m: f'<b>{html.escape(m.group(1))}</b>', chat_response)
-            sent = await message.answer(f"💬 {display_safe}", parse_mode="HTML")
+            sent = await message.answer(f"💬 {chat_response_display}", parse_mode="HTML")
             _cache_original(sent.message_id, chat_response_clean)
             await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
         else:
@@ -420,6 +387,8 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
     except Exception as e:
         logger.error(f"Error in flow message: {e}")
         await message.answer("Something went wrong. Try again.")
+
+# ─── Tutor Mode message handler ───────────────────────────────────────────────
 
 @router.message()
 async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin: bool = False):
@@ -467,7 +436,11 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
         history_task = asyncio.create_task(db.get_history(user_id, limit=settings.CONTEXT_WINDOW))
         summary_task = asyncio.create_task(db.get_latest_summary(user_id))
         topics_task = asyncio.create_task(db.get_topics_to_discuss(user_id))
-        history, is_farewell, summary, topics = await asyncio.gather(history_task, farewell_task, summary_task, topics_task)
+        practice_error_task = asyncio.create_task(db.get_error_for_practice(user_id))
+
+        history, is_farewell, summary, topics, practice_error = await asyncio.gather(
+            history_task, farewell_task, summary_task, topics_task, practice_error_task
+        )
 
         user_level = user.get("level", settings.DEFAULT_USER_LEVEL)
         should_reply_voice = (
@@ -475,7 +448,6 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
             (settings.VOICE_RESPONSE_MODE == "mirror" and is_voice_input)
         )
 
-        # Show "typing" while correction + response generate in parallel
         await message.bot.send_chat_action(user_id, "typing")
         chat_response, analysis_data = await groq_client.process_user_message(
             telegram_id=user_id,
@@ -483,65 +455,38 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
             user_level=user_level,
             history=history,
             summary=summary,
-            topics=topics
+            topics=topics,
+            practice_error=practice_error,  # передаём ошибку в process_user_message
         )
 
-        await db.save_message(user_id, "assistant", chat_response)
+        # Детектим правильное употребление — увеличиваем mastery ошибки
+        if practice_error and practice_error.get("corrected_text"):
+            asyncio.create_task(
+                _check_and_update_error_mastery(user_id, user_text, practice_error)
+            )
 
-        if analysis_data.get('vocabulary_items'):
-            for item in analysis_data['vocabulary_items']:
-                await db.add_to_vocabulary(user_id, item)
-
-        used_word = await db.find_word_in_text(user_id, user_text)
-        if used_word:
-            new_score = await db.increase_mastery(used_word["id"])
-            if new_score >= 5:
-                safe_word = html.escape(used_word["word_or_phrase"])
-                await message.answer(
-                    f"✅ <b>{safe_word}</b> — mastered! Added to your collection.",
-                    parse_mode="HTML"
-                )
-
-        if user.get("vocab_practice_enabled", False):
-            practice_words = await db.get_user_vocabulary(user_id, tab="active", limit=10)
-            if practice_words:
-                persona_key = user.get("persona", "mrs_smith")
-                persona_prompt = get_persona_tutor_prompt(persona_key)
-                practice_response = await groq_client.generate_practice_response(
-                    persona_prompt=persona_prompt,
-                    history=history,
-                    words=practice_words,
-                )
-                if practice_response:
-                    chat_response = practice_response
-
-        remind_counter = await db.increment_vocab_remind_counter(user_id)
-        if remind_counter >= 2:
-            await db.reset_vocab_remind_counter(user_id)
-            word_to_remind = await db.get_word_for_reminder(user_id)
-            if word_to_remind:
-                await db.mark_word_reminded(word_to_remind["id"])
-                chat_response = await groq_client.generate_vocab_reminder(
-                    word=word_to_remind["word_or_phrase"],
-                    translation=word_to_remind.get("translation", ""),
-                    bot_response=chat_response
-                )
-
-        error_cat = analysis_data.get('error_category')
-        if error_cat and error_cat.lower() != 'none':
-            await db.log_error(user_id, {"category": error_cat, "mistake_text": user_text})
+        # Логируем новую ошибку с corrected_text
+        error_cat = analysis_data.get("error_category")
+        if error_cat and error_cat.lower() != "none":
+            asyncio.create_task(db.log_error(user_id, {
+                "category": error_cat,
+                "mistake_text": user_text,
+                "corrected_text": analysis_data.get("corrected_sentence", ""),
+            }))
 
         await db.increment_user_metrics(user_id, tokens_used=0)
 
-        if not chat_response:
-            chat_response = "Sorry, I couldn't formulate a response."
+        chat_response_clean, chat_response_display = _process_mistake_tags(chat_response)
+        await db.save_message(user_id, "assistant", chat_response_clean)
 
-        chat_response_clean, chat_response_display = _process_vocab_tags(chat_response)
+        if not chat_response_clean:
+            chat_response_clean = "Sorry, I couldn't formulate a response."
+            chat_response_display = chat_response_clean
+
         voice = user.get("voice") or settings.TTS_VOICE
         persona_display = get_persona_display(user.get("persona", "mrs_smith"))
 
         if should_reply_voice:
-            # Switch to record_voice indicator before TTS
             await message.bot.send_chat_action(user_id, "record_voice")
             voice_bytes_out = await groq_client.text_to_speech(chat_response_clean, voice=voice)
             if voice_bytes_out:
@@ -554,15 +499,13 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
                 _cache_original(sent_voice.message_id, chat_response_clean)
                 await sent_voice.edit_reply_markup(reply_markup=get_flow_voice_keyboard(sent_voice.message_id))
         else:
-            # Text response
-            display_safe = re.sub(r'\[VOCAB:([^\]]+)\]', lambda m: f'<b>{html.escape(m.group(1))}</b>', chat_response)
-            sent = await message.answer(f"💬 {display_safe}", parse_mode="HTML")
+            sent = await message.answer(f"💬 {chat_response_display}", parse_mode="HTML")
             _cache_original(sent.message_id, chat_response_clean)
             await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
 
-        # Analysis block: send AFTER the response, only if there's a real correction
-        safe_corrected = html.escape(analysis_data.get('corrected_sentence', ''))
-        safe_explanation = html.escape(analysis_data.get('explanation', ''))
+        # Блок коррекции — отдельным сообщением после ответа
+        safe_corrected = html.escape(analysis_data.get("corrected_sentence", ""))
+        safe_explanation = html.escape(analysis_data.get("explanation", ""))
         has_correction = bool(safe_corrected and safe_corrected.strip() != html.escape(user_text).strip())
         if has_correction or safe_explanation:
             analysis_lines = []
@@ -570,8 +513,6 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
                 analysis_lines.append(f"✍️ <b>{safe_corrected}</b>")
             if safe_explanation:
                 analysis_lines.append(f"💡 {safe_explanation}")
-            if analysis_data.get('vocabulary_items'):
-                analysis_lines.append("📚 <i>New words added to your vocabulary</i>")
             await message.answer("\n\n".join(analysis_lines), parse_mode="HTML")
 
         if is_farewell:
@@ -581,6 +522,23 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
     except Exception as e:
         logger.error(f"Error handling message: {e}")
         await message.answer("Sorry, I encountered an error processing your message.", parse_mode="HTML")
+
+# ─── Error mastery detection ──────────────────────────────────────────────────
+
+async def _check_and_update_error_mastery(user_id: int, user_text: str, practice_error: Dict[str, Any]) -> None:
+    """Фоновая задача: если юзер правильно употребил конструкцию — увеличиваем mastery."""
+    try:
+        corrected_text = practice_error.get("corrected_text", "")
+        if not corrected_text:
+            return
+        used_correctly = await groq_client.detect_word_usage(corrected_text, user_text)
+        if used_correctly:
+            new_score = await db.increase_error_mastery(practice_error["id"])
+            logger.info(f"✅ Error mastery increased for user {user_id}: {practice_error.get('category')} → {new_score}")
+    except Exception as e:
+        logger.error(f"Error in mastery check: {e}")
+
+# ─── Translate / Original callbacks ──────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("translate_"))
 async def handle_translate(callback: CallbackQuery):
@@ -595,11 +553,11 @@ async def handle_translate(callback: CallbackQuery):
         translation = await groq_client.translate_text(original_text)
         safe_translation = html.escape(translation)
 
-        current_markup = callback.message.reply_markup
         from aiogram.utils.keyboard import InlineKeyboardBuilder
         from aiogram.types import InlineKeyboardButton
         builder = InlineKeyboardBuilder()
         builder.row(InlineKeyboardButton(text="🔤 Original", callback_data=f"original_{message_id}"))
+        current_markup = callback.message.reply_markup
         if current_markup:
             for row in current_markup.inline_keyboard:
                 for btn in row:
@@ -628,11 +586,11 @@ async def handle_original(callback: CallbackQuery):
 
         safe_original = html.escape(original_text)
 
-        current_markup = callback.message.reply_markup
         from aiogram.utils.keyboard import InlineKeyboardBuilder
         from aiogram.types import InlineKeyboardButton
         builder = InlineKeyboardBuilder()
         builder.row(InlineKeyboardButton(text="🌐 Translate", callback_data=f"translate_{message_id}"))
+        current_markup = callback.message.reply_markup
         if current_markup:
             for row in current_markup.inline_keyboard:
                 for btn in row:
@@ -649,16 +607,16 @@ async def handle_original(callback: CallbackQuery):
         logger.error(f"Error in original callback: {e}")
         await callback.answer("Could not restore original.", show_alert=True)
 
+# ─── Flow voice callbacks ──────────────────────────────────────────────────────
+
 @router.callback_query(F.data.startswith("flow_text_"))
 async def flow_show_text(callback: CallbackQuery):
     try:
         message_id = int(callback.data.split("_")[2])
         original = _originals_cache.get(message_id)
-
         if not original:
             await callback.answer("Text not available.", show_alert=True)
             return
-
         safe_text = html.escape(original)
         await callback.message.edit_caption(
             caption=f"💬 {safe_text}",
@@ -675,14 +633,11 @@ async def flow_translate(callback: CallbackQuery):
     try:
         message_id = int(callback.data.split("_")[2])
         original = _originals_cache.get(message_id)
-
         if not original:
             await callback.answer("Text not available.", show_alert=True)
             return
-
         translation = await groq_client.translate_text(original)
         safe_translation = html.escape(translation)
-
         await callback.message.edit_caption(
             caption=f"🌐 {safe_translation}",
             parse_mode="HTML",
@@ -698,13 +653,10 @@ async def flow_original(callback: CallbackQuery):
     try:
         message_id = int(callback.data.split("_")[2])
         original = _originals_cache.get(message_id)
-
         if not original:
             await callback.answer("Text not available.", show_alert=True)
             return
-
         persona_display = callback.message.caption.split("\n")[0] if callback.message.caption else ""
-
         await callback.message.edit_caption(
             caption=persona_display,
             reply_markup=get_flow_voice_keyboard(message_id)
@@ -719,26 +671,20 @@ async def uvoice_show_text(callback: CallbackQuery):
     try:
         message_id = int(callback.data.split("_")[2])
         user_text = _originals_cache.get(message_id)
-
         if not user_text:
             await callback.answer("Text not available.", show_alert=True)
             return
-
         user = await db.get_or_create_user(callback.from_user.id)
         user_level = user.get("level", settings.DEFAULT_USER_LEVEL)
-
         correction = await groq_client.correct_text(user_text, user_level)
-
         safe_text = html.escape(user_text)
         safe_corrected = html.escape(correction.get("corrected_sentence", user_text))
         safe_explanation = html.escape(correction.get("explanation", ""))
-
         text = (
             f"🎤 <i>{safe_text}</i>\n\n"
             f"✅ <b>Correct</b>\n{safe_corrected}\n\n"
             f"💡 <b>Why</b>\n{safe_explanation}"
         )
-
         await callback.message.edit_text(text, parse_mode="HTML")
         await callback.answer()
     except Exception as e:
@@ -750,14 +696,11 @@ async def uvoice_translate(callback: CallbackQuery):
     try:
         message_id = int(callback.data.split("_")[2])
         user_text = _originals_cache.get(message_id)
-
         if not user_text:
             await callback.answer("Text not available.", show_alert=True)
             return
-
         translation = await groq_client.translate_text(user_text)
         safe_translation = html.escape(translation)
-
         await callback.message.edit_text(
             f"🌐 <i>{safe_translation}</i>",
             parse_mode="HTML"
