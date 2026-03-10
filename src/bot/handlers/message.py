@@ -166,8 +166,9 @@ async def run_merge_summaries(user_id: int) -> None:
 @router.message(F.text == "🎙 Flow")
 async def activate_flow(message: Message, state: FSMContext):
     await state.set_state(FlowState.choosing_persona)
+    await state.update_data(active_mode=MODE_FLOW)  # ← ДОБАВИТЬ
     await message.answer("Who would you like to talk to?", reply_markup=get_persona_keyboard())
-
+    
 @router.message(F.text == "⏹ Stop Flow")
 async def deactivate_flow(message: Message, state: FSMContext):
     await state.clear()
@@ -190,18 +191,20 @@ async def deactivate_tutor(message: Message, state: FSMContext):
 @router.message(F.text == "✉️ PenFriend")
 async def activate_penfriend(message: Message, state: FSMContext):
     await state.set_state(FlowState.choosing_persona)
+    await state.update_data(active_mode=MODE_PENFRIEND)  # ← ДОБАВИТЬ
     await db.update_mode(message.from_user.id, MODE_PENFRIEND)
     await message.answer(
         "✉️ <b>PenFriend Mode</b>\n\nWho would you like to write to?",
         parse_mode="HTML",
         reply_markup=get_persona_keyboard()
     )
-
+    
 @router.message(F.text == "⏹ Stop PenFriend")
 async def deactivate_penfriend(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("⏹ PenFriend Mode off", reply_markup=get_mode_keyboard())
 
+@router.message(F.text == "↩ Switch")
 @router.message(F.text == "↩ Switch")
 async def flow_switch_reply(message: Message, state: FSMContext):
     try:
@@ -211,14 +214,17 @@ async def flow_switch_reply(message: Message, state: FSMContext):
             f"{m['role']}: {m['content']}" for m in history
         ]) if history else ""
 
-        await state.update_data(switch_context=context_text)
+        user = await db.get_or_create_user(user_id)          # ← ДОБАВИТЬ
+        current_mode = user.get("mode", MODE_FLOW)            # ← ДОБАВИТЬ
+
+        await state.update_data(switch_context=context_text, active_mode=current_mode)  # ← изменить
         await state.set_state(FlowState.choosing_persona)
 
         await message.answer("Who would you like to talk to next?", reply_markup=get_persona_keyboard())
     except Exception as e:
         logger.error(f"Error in flow switch reply: {e}")
         await message.answer("Something went wrong. Try again.")
-
+        
 @router.callback_query(F.data.startswith("persona_"), FlowState.choosing_persona)
 async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
     try:
@@ -254,7 +260,7 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
             persona_key=persona_key,
             voice=voice,
             switch_context="",
-            active_mode=user.get("mode", MODE_FLOW)
+            active_mode = fsm_data.get("active_mode", MODE_FLOW)
         )
         await state.set_state(FlowState.active)
 
@@ -279,7 +285,7 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
         await db.save_message(user_id, "assistant", greeting)
 
         persona_display = get_persona_display(persona_key)
-        active_mode = user.get("mode", MODE_FLOW)
+        active_mode = fsm_data.get("active_mode", MODE_FLOW)
 
         # Правильная reply-клавиатура и подпись в зависимости от режима
         if active_mode == MODE_PENFRIEND:
