@@ -265,16 +265,24 @@ You are an elite ESL Professor with 15+ years of experience. Your goal is to ana
         else:
             memory_block = ""
 
+        if session_count == 0:
+            context_instruction = "[greet the user for the first time — you've never spoken before]"
+        elif session_count < 5:
+            context_instruction = "[you've spoken a few times before — pick up naturally, reference something from your shared history if you have it]"
+        else:
+            context_instruction = "[you know this person well — greet them like a friend you haven't seen in a day or two, no need for pleasantries]"
+
         system = (
             f"{persona_prompt}{memory_block}\n\n"
             f"# YOUR TASK\n"
-            f"Say hello in your own voice. Keep it very short.\n"
+            f"Say hello in your own voice. Keep it very short — 1 to 2 sentences max.\n"
             f"Adapt your vocabulary complexity to this English level: {user_level}.\n"
+            f"NEVER say 'it's great to see you again' or 'finally' or 'I missed you' — just be natural.\n"
         )
 
         messages = [
             {"role": "system", "content": system},
-            {"role": "user", "content": "[greet the user for the first time]"}
+            {"role": "user", "content": context_instruction}
         ]
 
         async def _greeting(client):
@@ -437,100 +445,146 @@ You are an elite ESL Professor with 15+ years of experience. Your goal is to ana
             logger.error(f"❌ Ошибка practice response: {e}")
             return ""
 
+    async def generate_mistakes_practice_response(
+        self,
+        persona_prompt: str,
+        history: list,
+        errors: list,
+        extra_instruction: str = ""
+    ) -> str:
+        """
+        Ответ Mrs. Smith в Mistakes Practice Mode.
+        errors — список dict: {category, examples: [str, str]}
+        Персонаж органично моделирует правильные формы в своей речи,
+        не называя ошибку явно.
+        """
+        if not errors:
+            return ""
+
+        errors_block = ""
+        for e in errors:
+            cat = e.get("category", "")
+            examples = e.get("examples", [])
+            ex_str = "; ".join(f'"{ex}"' for ex in examples) if examples else ""
+            errors_block += f"- {cat}"
+            if ex_str:
+                errors_block += f" (user said: {ex_str})"
+            errors_block += "\n"
+
+        async def _practice(client):
+            response = await client.chat.completions.create(
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            f"{persona_prompt}\n\n"
+                            f"# MISTAKES PRACTICE\n"
+                            f"The user has recurring errors in these areas:\n{errors_block}\n"
+                            f"In your response, naturally use correct forms that address these patterns. "
+                            f"Do NOT say 'you made a mistake' or 'remember to use'. "
+                            f"Just model the correct form in your own speech — as you always would. "
+                            f"NEVER announce that you are doing this."
+                            + (f"\n{extra_instruction}" if extra_instruction else "")
+                        )
+                    },
+                    *history
+                ],
+                temperature=0.8,
+                max_tokens=200
+            )
+            return response.choices[0].message.content.strip()
+
+        try:
+            return await self._make_request(_practice)
+        except Exception as e:
+            logger.error(f"❌ Ошибка mistakes practice response: {e}")
+            return ""
+
+    async def generate_weekly_report(
+        self,
+        persona_key: str,
+        stats: Dict[str, Any],
+        errors: list
+    ) -> str:
+        """
+        Еженедельный отчёт от лица персонажа.
+        Честный, конкретный, без выдумок.
+        """
+        from src.personas import get_persona_prompt as _get_prompt
+        persona_prompt = _get_prompt(persona_key)
+
+        vocab_count = stats.get("vocabulary_count", 0)
+        mastered_count = stats.get("mastered_count", 0)
+        msgs_this_week = stats.get("msgs_this_week", 0)
+        msgs_prev_week = stats.get("msgs_prev_week", 0)
+
+        stats_lines = []
+        if msgs_this_week > 0:
+            stats_lines.append(f"- Messages this week: {msgs_this_week} (prev week: {msgs_prev_week})")
+        if vocab_count > 0:
+            stats_lines.append(f"- Vocabulary: {vocab_count} words saved, {mastered_count} mastered")
+
+        errors_lines = []
+        for e in errors:
+            cat = e.get("category", "")
+            examples = e.get("examples", [])
+            ex_str = "; ".join(f'"{ex}"' for ex in examples) if examples else ""
+            line = f"- {cat}"
+            if ex_str:
+                line += f": {ex_str}"
+            errors_lines.append(line)
+
+        stats_block = "\n".join(stats_lines) if stats_lines else "No activity data this week."
+        errors_block = "\n".join(errors_lines) if errors_lines else "No recurring errors this week."
+
+        system = (
+            f"{persona_prompt}\n\n"
+            f"# WEEKLY REPORT\n"
+            f"Write a short personal weekly summary for the user.\n"
+            f"Use ONLY the data below — no invented numbers or streaks.\n\n"
+            f"## Activity\n{stats_block}\n\n"
+            f"## Recurring errors\n{errors_block}\n\n"
+            f"Format: 3-5 sentences. Warm but honest. "
+            f"Name what went well, name what to work on, give one concrete tip. "
+            f"Speak as yourself — not as a teacher reading a report card."
+        )
+
+        async def _report(client):
+            response = await client.chat.completions.create(
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": "[write the weekly report]"}
+                ],
+                temperature=0.75,
+                max_tokens=250
+            )
+            return response.choices[0].message.content.strip()
+
+        try:
+            return await self._make_request(_report)
+        except Exception as e:
+            logger.error(f"❌ Ошибка weekly report: {e}")
+            return "Couldn't generate your weekly report right now. Try again later."
+
     async def generate_re_engagement_notification(
         self,
         persona_key: str,
         stats: Dict[str, Any]
     ) -> str:
-        import random
-
         persona_prompt = get_persona_prompt(persona_key)
-
-        topic_pools = {
-            "greg": [
-                "You just finished a long shift and grabbed food on the way home.",
-                "You're watching a Celtics game and it's going badly.",
-                "You tried a new recipe from Mark and it actually worked.",
-                "You had a weird case today you can't stop thinking about.",
-                "You're procrastinating on studying and your phone is right there.",
-            ],
-            "mark": [
-                "You just closed the kitchen after a rough service.",
-                "You got a new seasonal ingredient and you're already planning something.",
-                "You had a customer tonight who actually knew what they were eating.",
-                "You've been thinking about a dish you want to put on the menu.",
-                "Summer called earlier and it got you in a good mood.",
-            ],
-            "junior": [
-                "Leo just said something hilarious at dinner.",
-                "You've been debugging the same thing for two hours and need a break.",
-                "Pixel knocked your coffee off the desk and you're not even mad.",
-                "You just read something about AI that genuinely surprised you.",
-                "Jane made you step away from the computer and you actually feel better.",
-            ],
-            "mrs_smith": [
-                "You just finished grading and made yourself a cup of tea.",
-                "You walked home through the park and it was unusually quiet.",
-                "One of your students said something today that stuck with you.",
-                "You've been reading something good and wanted someone to talk to about it.",
-                "Your garden has something new coming up and you noticed it this morning.",
-            ],
-            "summer": [
-                "You just landed somewhere new and the light here is incredible.",
-                "You found a tiny café nobody knows about and you're sitting in it right now.",
-                "You had a conversation with a stranger today that changed your afternoon.",
-                "You're packing for the next trip and can't decide what to leave behind.",
-                "You called Mark earlier and now you're missing home a little.",
-            ],
-            "jane": [
-                "Both boys are finally asleep and you have five minutes to yourself.",
-                "You saw something at the grocery store that made you think of a campaign idea.",
-                "Junior said something ridiculous today and you're still laughing about it.",
-                "You've been half-planning something and wanted to think it through out loud.",
-                "You made a really good coffee this morning and the house was quiet for once.",
-            ],
-        }
-
-        topics = topic_pools.get(persona_key, topic_pools["greg"])
-        topic = random.choice(topics)
-
-        # Статистика — только ненулевые факты, не больше одного
-        stat_hints = []
-        if stats.get("vocabulary_count", 0) > 0:
-            stat_hints.append(f"they have {stats['vocabulary_count']} words saved")
-        if stats.get("mastered_count", 0) > 0:
-            stat_hints.append(f"they've mastered {stats['mastered_count']} of them")
-        if stats.get("msgs_this_week", 0) > 0:
-            stat_hints.append(f"they sent {stats['msgs_this_week']} messages this week")
-
-        stat_line = ""
-        if stat_hints:
-            chosen_stat = random.choice(stat_hints)
-            stat_line = (
-                f"\nOptionally, if it fits naturally, you can mention that {chosen_stat}. "
-                f"Only use it if it flows — don't force it."
-            )
-
-        system = (
-            f"{persona_prompt}\n\n"
-            f"# SITUATION\n"
-            f"{topic}\n\n"
-            f"Write a short natural message to the user checking in — 1 to 3 sentences. "
-            f"Speak as yourself in this moment. Don't be a coach or tutor. "
-            f"Don't use emojis. Don't sound like a notification. "
-            f"Just a real person reaching out."
-            f"{stat_line}"
-        )
-
+        
+        system = f"{persona_prompt}\nWrite a short warm re-engagement message mentioning their streak or vocab progress."
         async def _notify(client):
             response = await client.chat.completions.create(
                 model="meta-llama/llama-4-scout-17b-16e-instruct",
                 messages=[
                     {"role": "system", "content": system},
-                    {"role": "user", "content": "[write the message]"}
+                    {"role": "user", "content": "[write the re-engagement message]"}
                 ],
-                temperature=0.9,
-                max_tokens=120
+                temperature=0.85,
+                max_tokens=150
             )
             return response.choices[0].message.content.strip()
 
