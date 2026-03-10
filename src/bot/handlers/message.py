@@ -160,6 +160,7 @@ async def run_merge_summaries(user_id: int) -> None:
 
 @router.message(F.text == "🎙 Flow")
 async def activate_flow(message: Message, state: FSMContext):
+    await db.update_mode(message.from_user.id, MODE_FLOW)
     await state.set_state(FlowState.choosing_persona)
     await message.answer("Who would you like to talk to?", reply_markup=get_persona_keyboard())
 
