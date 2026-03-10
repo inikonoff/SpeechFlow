@@ -279,21 +279,43 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
         await db.save_message(user_id, "assistant", greeting)
 
         persona_display = get_persona_display(persona_key)
-        if switch_context:
-            await callback.message.answer(f"↩ Switched to {persona_display}", parse_mode="HTML")
-        else:
-            await callback.message.answer(f"🎙 Flow Mode — {persona_display}", parse_mode="HTML")
+        active_mode = user.get("mode", MODE_FLOW)
 
-        voice_bytes = await groq_client.text_to_speech(greeting, voice=voice)
-        if voice_bytes:
-            voice_file = BufferedInputFile(voice_bytes, filename="greeting.wav")
-            sent = await callback.message.answer_voice(
-                voice_file,
-                caption=persona_display,
-                reply_markup=get_flow_voice_keyboard(0)
-            )
+        # Правильная reply-клавиатура и подпись в зависимости от режима
+        if active_mode == MODE_PENFRIEND:
+            mode_keyboard = get_penfriend_keyboard()
+            if switch_context:
+                mode_label = f"↩ Switched to {persona_display}"
+            else:
+                mode_label = f"✉️ PenFriend Mode — {persona_display}"
+        else:
+            mode_keyboard = get_flow_stop_keyboard()
+            if switch_context:
+                mode_label = f"↩ Switched to {persona_display}"
+            else:
+                mode_label = f"🎙 Flow Mode — {persona_display}"
+
+        await callback.message.answer(mode_label, parse_mode="HTML", reply_markup=mode_keyboard)
+
+        if active_mode != MODE_PENFRIEND:
+            # В PenFriend голосовые ответы бота не отправляются
+            voice_bytes = await groq_client.text_to_speech(greeting, voice=voice)
+            if voice_bytes:
+                voice_file = BufferedInputFile(voice_bytes, filename="greeting.wav")
+                sent = await callback.message.answer_voice(
+                    voice_file,
+                    caption=persona_display,
+                    reply_markup=get_flow_voice_keyboard(0)
+                )
+                _cache_original(sent.message_id, greeting)
+                await sent.edit_reply_markup(reply_markup=get_flow_voice_keyboard(sent.message_id))
+        else:
+            # PenFriend — текстовое приветствие
+            import html as _html
+            safe_greeting = _html.escape(greeting)
+            sent = await callback.message.answer(f"💬 {safe_greeting}", parse_mode="HTML")
             _cache_original(sent.message_id, greeting)
-            await sent.edit_reply_markup(reply_markup=get_flow_voice_keyboard(sent.message_id))
+            await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
 
         await callback.answer()
 
