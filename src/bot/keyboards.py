@@ -86,14 +86,16 @@ def get_admin_user_card_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="← К списку", callback_data="admin_users"))
     return builder.as_markup()
 
-def get_settings_keyboard(notifications_enabled: bool, user_id: int = 0, practice_mode: bool = False) -> InlineKeyboardMarkup:
+def get_settings_keyboard(notifications_enabled: bool, user_id: int = 0, practice_mode: bool = False, mistakes_mode: bool = False) -> InlineKeyboardMarkup:
     notif_text = "🔔 Notifications: ON" if notifications_enabled else "🔕 Notifications: OFF"
     practice_text = "📚 Vocab Practice: ON" if practice_mode else "📚 Vocab Practice: OFF"
+    mistakes_text = "🔴 Mistakes Practice: ON" if mistakes_mode else "🔴 Mistakes Practice: OFF"
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text=notif_text,                  callback_data="toggle_notifications"))
     builder.row(InlineKeyboardButton(text="📊 Change Level",           callback_data="change_level"))
     builder.row(InlineKeyboardButton(text="✏️ Correction Sensitivity", callback_data="correction_rate"))
     builder.row(InlineKeyboardButton(text=practice_text,               callback_data="toggle_vocab_practice"))
+    builder.row(InlineKeyboardButton(text=mistakes_text,               callback_data="toggle_mistakes_practice"))
     if user_id in ADMIN_IDS:
         builder.row(InlineKeyboardButton(text="🔧 Админ-панель",       callback_data="admin_panel"))
     builder.row(InlineKeyboardButton(text="← Back",                    callback_data="back_to_menu"))
