@@ -251,7 +251,6 @@ class SupabaseDB:
                 "user_id": user_id,
                 "role": role,
                 "content": content,
-                "tokens": tokens
             }
             self.client.table("messages").insert(data).execute()
         except Exception as e:
