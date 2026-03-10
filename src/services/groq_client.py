@@ -479,14 +479,15 @@ User Level: {level}"""
                     {
                         "role": "system",
                         "content": (
-                            "You analyze a conversation and return a JSON object with two fields:\n"
-                            "1. \"summary\": concise facts about the user in third person, present tense. "
-                            "Life, interests, goals, relationships, opinions, anything personally significant. "
+                            "You analyze a conversation and return a JSON object with two fields.\n"
+                            "In the conversation: USER = the student/learner, ASSISTANT = the AI persona.\n"
+                            "The summary must ONLY contain facts about the USER — never about the ASSISTANT.\n"
+                            "1. \"summary\": concise facts about the USER in third person, present tense. "
+                            "Life, interests, goals, relationships, opinions, anything personally significant they mentioned. "
+                            "Never include facts about what the ASSISTANT said, did, or experienced. "
                             "If existing knowledge provided — merge, update outdated facts, add new. Max 150 words.\n"
-                            "2. \"topics_to_discuss\": a short comma-separated list of topics the user "
-                            "has mentioned more than once or shown clear interest in. "
-                            "These are conversation starters the persona can naturally pick up. "
-                            "Keywords only, e.g. \"macro photography, Telegram bots, cooking, hiking\". "
+                            "2. \"topics_to_discuss\": comma-separated topics the USER has mentioned more than once or shown clear interest in. "
+                            "Conversation starters only. Keywords only, e.g. \"macro photography, Telegram bots, cooking, hiking\". "
                             "Max 10 topics. Empty string if nothing clear.\n"
                             "Return ONLY valid JSON. No markdown, no explanation."
                         )
@@ -965,7 +966,13 @@ User stats:
 
         memory_block = ""
         if summary:
-            memory_block = f"\n\n# WHAT YOU KNOW ABOUT THIS STUDENT\n{summary}"
+            memory_block = (
+                f"\n\n# WHAT YOU KNOW ABOUT THIS STUDENT"
+                f"\nIMPORTANT: Everything below describes YOUR STUDENT — not you."
+                f"\nThese are facts about the person you are teaching. They are NOT about Mrs. Smith."
+                f"\nDo NOT confuse these facts with your own life, experiences, or history."
+                f"\n{summary}"
+            )
 
         topics_block = ""
         if topics and topics.strip():
