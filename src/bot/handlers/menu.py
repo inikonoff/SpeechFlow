@@ -50,22 +50,24 @@ Pure voice conversation with a character. No corrections, no analysis — just r
 Greg 🧑‍⚕️ · Mark 👨‍🍳 · Junior 👨‍💻 · Mrs. Smith 👩‍🏫 · Summer 🌍 · Jane ☕
 Six people, one small world. Each remembers your conversations.
 
-<b>📚 Vocabulary &amp; Stats</b>
-New words are saved automatically as you chat. Use /stats to track your progress and /vocabulary to review your words.
+<b>📋 Practice Log &amp; Stats</b>
+Your mistakes are tracked automatically. Use /stats to see your progress and /practice to review your error patterns.
 
 💡 Flow Mode is where real fluency happens — use it often."""
 
 # ─── Mastery helpers ───────────────────────────────────────────────────────
 
+ERROR_MASTERY_THRESHOLD = 3
+
 def mastery_label(score: int) -> str:
     if score == 0:
         return "🆕"
-    elif score <= 2:
+    elif score == 1:
         return "📖"
-    elif score <= 4:
+    elif score == 2:
         return "🔄"
     else:
-        return "✅"
+        return "✅"  # score >= 3
 
 def trend_arrow(current: int, previous: int) -> str:
     if previous == 0:
@@ -86,11 +88,10 @@ async def cmd_stats(message: Message):
 async def cmd_settings(message: Message):
     user = await db.get_or_create_user(message.from_user.id)
     notif = user.get("notifications_enabled", True)
-    practice = user.get("vocab_practice_enabled", False)
     await message.answer(
         "⚙️ <b>Settings</b>",
         parse_mode="HTML",
-        reply_markup=get_settings_keyboard(notif, message.from_user.id, practice)
+        reply_markup=get_settings_keyboard(notif, message.from_user.id)
     )
 
 @router.message(Command("author"))
@@ -115,8 +116,8 @@ def _build_quick_stats(stats: dict) -> str:
     level = str(user.get("level", "Not set")).upper()
     streak = user.get("streak_days", 0)
     persona = user.get("persona", "greg").capitalize()
-    vocab_count = stats.get("vocabulary_count", 0)
-    mastered = stats.get("mastered_count", 0)
+    active_errors = stats.get("active_errors_count", 0)
+    mastered_errors = stats.get("mastered_errors_count", 0)
     msgs_this = stats.get("msgs_this_week", 0)
     msgs_prev = stats.get("msgs_prev_week", 0)
     error_week = stats.get("error_stats_week", {})
@@ -136,10 +137,9 @@ def _build_quick_stats(stats: dict) -> str:
         arrow = trend_arrow(msgs_this, msgs_prev).strip()
         activity_line += f"  <i>({arrow or '→'} vs last week)</i>"
 
-    vocab_line = f"• Vocabulary: <b>{vocab_count}</b> words"
-    if mastered > 0:
-        pct = int(mastered / vocab_count * 100) if vocab_count else 0
-        vocab_line += f" · <b>{mastered}</b> mastered ({pct}%) ✅"
+    practice_line = f"• Practice Log: <b>{active_errors}</b> active"
+    if mastered_errors > 0:
+        practice_line += f" · <b>{mastered_errors}</b> mastered ✅"
 
     text = (
         f"📊 <b>Your Speech Flow Stats</b>\n\n"
@@ -149,7 +149,7 @@ def _build_quick_stats(stats: dict) -> str:
         f"{streak_line}\n\n"
         f"📈 <b>This week</b>\n"
         f"{activity_line}\n"
-        f"{vocab_line}\n\n"
+        f"{practice_line}\n\n"
         f"🎯 <b>Errors this week</b>\n"
     )
 
@@ -195,72 +195,65 @@ async def _send_stats(user_id: int, send_fn, edit_msg=None):
         else:
             await send_fn("Error loading stats.", parse_mode="HTML")
 
-# ─── Vocabulary helpers ────────────────────────────────────────────────────
+# ─── Practice Log helpers ──────────────────────────────────────────────────
 
-TAB_LABELS = {"active": "🔥 Active", "all": "📖 All", "difficult":"⭐ Difficult", "mastered": "✅ Mastered"}
+PRACTICE_TAB_LABELS = {"mistakes": "📖 Mistakes", "mastered": "✅ Mastered"}
 
-def _vocab_tab_keyboard(current_tab: str) -> InlineKeyboardMarkup:
+def _practice_tab_keyboard(current_tab: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    tabs = ["active", "all", "difficult", "mastered"]
+    tabs = ["mistakes", "mastered"]
     row = []
     for t in tabs:
-        label = f"· {TAB_LABELS[t]} ·" if t == current_tab else TAB_LABELS[t]
-        row.append(InlineKeyboardButton(text=label, callback_data=f"vocab_tab_{t}"))
+        label = f"· {PRACTICE_TAB_LABELS[t]} ·" if t == current_tab else PRACTICE_TAB_LABELS[t]
+        row.append(InlineKeyboardButton(text=label, callback_data=f"practice_tab_{t}"))
     builder.row(*row)
     return builder.as_markup()
 
-def _build_vocab_text(vocabulary: list, tab: str) -> str:
-    tab_label = TAB_LABELS.get(tab, "📖 Vocabulary")
-    if not vocabulary:
+def _build_practice_text(errors: list, tab: str) -> str:
+    tab_label = PRACTICE_TAB_LABELS.get(tab, "📋 Practice Log")
+    if not errors:
         empty_msgs = {
-            "active": "No active words — keep chatting and they'll appear here.",
-            "difficult": "No difficult words yet. Great progress!",
-            "mastered": "No mastered words yet — keep practicing!",
-            "all": "Empty so far. Words from your conversations will appear here automatically.",
+            "mistakes": "No active mistakes yet — keep chatting and they'll appear here.",
+            "mastered": "Nothing mastered yet — keep practicing!",
         }
-        return f"📚 <b>Your Vocabulary — {tab_label}</b>\n\n{empty_msgs.get(tab, '')}"
+        return f"📋 <b>Practice Log — {tab_label}</b>\n\n{empty_msgs.get(tab, '')}\n\n<i>Mistakes are tracked automatically from your conversations.</i>"
 
-    text = f"📚 <b>Your Vocabulary — {tab_label}</b>  <i>({len(vocabulary)} words)</i>\n\n"
-    for i, item in enumerate(vocabulary, 1):
-        word = html.escape(item.get("word_or_phrase", ""))
-        translation = html.escape(item.get("translation", ""))
-        context = html.escape(item.get("context_sentence", ""))
+    text = f"📋 <b>Practice Log — {tab_label}</b>  <i>({len(errors)} patterns)</i>\n\n"
+    for i, item in enumerate(errors, 1):
+        category = html.escape(item.get("category", ""))
+        mistake = html.escape(item.get("mistake_text", ""))
+        corrected = html.escape(item.get("corrected_text", ""))
         score = item.get("mastery_score", 0)
-        reminded = item.get("times_reminded", 0)
-        used = item.get("times_used", 0)
-        wtype = item.get("word_type", "")
+        times = item.get("times_corrected", 0)
 
-        type_badge = {"phrasal_verb": "🔗", "collocation": "🔀", "grammar_pattern": "📐", "phrase": "💬"}.get(wtype, "")
-        mastery_bar = "█" * score + "░" * (5 - score)
-
-        text += f"{i}. {type_badge}<b>{word}</b> — {translation}\n"
-        if context:
-            short = context[:55] + "…" if len(context) > 55 else context
-            text += f"   <i>\"{short}\"</i>\n"
-        text += f"   <code>{mastery_bar}</code>"
-        if reminded > 0:
-            text += f"  reminded: {reminded}"
-        if used > 0:
-            text += f"  used: {used}"
+        mastery_bar = "█" * score + "░" * (ERROR_MASTERY_THRESHOLD - score)
+        text += f"{i}. 📌 <b>{category}</b>\n"
+        if mistake:
+            text += f"   ❌ <i>{mistake[:60] + '…' if len(mistake) > 60 else mistake}</i>\n"
+        if corrected:
+            text += f"   ✅ {corrected[:60] + '…' if len(corrected) > 60 else corrected}\n"
+        text += f"   <code>{mastery_bar}</code>  {score}/{ERROR_MASTERY_THRESHOLD}"
+        if times > 0:
+            text += f"  ·  corrected {times}×"
         text += "\n\n"
     return text
 
-async def _send_vocabulary(user_id: int, send_fn, tab: str = "active", edit_msg=None):
+async def _send_practice_log(user_id: int, send_fn, tab: str = "mistakes", edit_msg=None):
     try:
-        vocabulary = await db.get_user_vocabulary(user_id, tab=tab, limit=20)
-        text = _build_vocab_text(vocabulary, tab)
-        kb = _vocab_tab_keyboard(tab)
+        errors = await db.get_user_errors(user_id, tab=tab)
+        text = _build_practice_text(errors, tab)
+        kb = _practice_tab_keyboard(tab)
 
         if edit_msg:
             await edit_msg(text, parse_mode="HTML", reply_markup=kb)
         else:
             await send_fn(text, parse_mode="HTML", reply_markup=kb)
     except Exception as e:
-        logger.error(f"Error in vocabulary: {e}")
+        logger.error(f"Error in practice log: {e}")
         if edit_msg:
-            await edit_msg("Error loading vocabulary.", parse_mode="HTML")
+            await edit_msg("Error loading Practice Log.", parse_mode="HTML")
         else:
-            await send_fn("Error loading vocabulary.", parse_mode="HTML")
+            await send_fn("Error loading Practice Log.", parse_mode="HTML")
 
 # ─── Callbacks ─────────────────────────────────────────────────────────────
 
@@ -281,11 +274,10 @@ async def show_settings(callback: CallbackQuery):
     try:
         user = await db.get_or_create_user(callback.from_user.id)
         notif = user.get("notifications_enabled", True)
-        practice = user.get("vocab_practice_enabled", False)
         await callback.message.edit_text(
             "⚙️ <b>Settings</b>",
             parse_mode="HTML",
-            reply_markup=get_settings_keyboard(notif, callback.from_user.id, practice)
+            reply_markup=get_settings_keyboard(notif, callback.from_user.id)
         )
         await callback.answer()
     except Exception as e:
@@ -299,30 +291,14 @@ async def toggle_notifications(callback: CallbackQuery):
         current = user.get("notifications_enabled", True)
         new_value = not current
         await db.update_notifications(callback.from_user.id, new_value)
-        practice = user.get("vocab_practice_enabled", False)
         status = "ON 🔔" if new_value else "OFF 🔕"
         await callback.answer(f"Notifications {status}", show_alert=False)
 
         await callback.message.edit_reply_markup(
-            reply_markup=get_settings_keyboard(new_value, callback.from_user.id, practice)
+            reply_markup=get_settings_keyboard(new_value, callback.from_user.id)
         )
     except Exception as e:
         logger.error(f"Error toggling notifications: {e}")
-        await callback.answer("Error.", show_alert=True)
-
-@router.callback_query(F.data == "toggle_vocab_practice")
-async def toggle_vocab_practice(callback: CallbackQuery):
-    try:
-        new_val = await db.toggle_vocab_practice_mode(callback.from_user.id)
-        status = "ON 📚" if new_val else "OFF"
-        await callback.answer(f"Vocabulary Practice {status}", show_alert=False)
-        user = await db.get_or_create_user(callback.from_user.id)
-        notif = user.get("notifications_enabled", True)
-        await callback.message.edit_reply_markup(
-            reply_markup=get_settings_keyboard(notif, callback.from_user.id, new_val)
-        )
-    except Exception as e:
-        logger.error(f"Error toggling vocab practice: {e}")
         await callback.answer("Error.", show_alert=True)
 
 @router.callback_query(F.data == "change_level")
@@ -469,8 +445,8 @@ async def show_admin_user_card(callback: CallbackQuery):
             f"🔥 Streak: <b>{streak} дн.</b>\n\n"
             f"💬 Сообщений всего: <b>{card.get('msgs_total', 0)}</b>\n"
             f"📈 За неделю: <b>{card.get('msgs_week', 0)}</b>\n\n"
-            f"📖 Словарь: <b>{card.get('vocab_count', 0)}</b> слов "
-            f"· <b>{card.get('mastered_count', 0)}</b> освоено"
+            f"📋 Practice Log: <b>{card.get('active_errors_count', 0)}</b> активных · "
+            f"<b>{card.get('mastered_errors_count', 0)}</b> освоено"
         )
         await callback.message.edit_text(
             text,
@@ -487,11 +463,10 @@ async def back_to_settings(callback: CallbackQuery):
     try:
         user = await db.get_or_create_user(callback.from_user.id)
         notif = user.get("notifications_enabled", True)
-        practice = user.get("vocab_practice_enabled", False)
         await callback.message.edit_text(
             "⚙️ <b>Settings</b>",
             parse_mode="HTML",
-            reply_markup=get_settings_keyboard(notif, callback.from_user.id, practice)
+            reply_markup=get_settings_keyboard(notif, callback.from_user.id)
         )
         await callback.answer()
     except Exception as e:
@@ -686,25 +661,25 @@ async def cq_stats_original(callback: CallbackQuery):
         logger.error(f"Error in stats_original: {e}")
         await callback.answer("Error.", show_alert=True)
 
-@router.callback_query(F.data == "my_vocabulary")
-async def cq_show_vocab(callback: CallbackQuery):
+@router.callback_query(F.data == "my_practice_log")
+async def cq_show_practice_log(callback: CallbackQuery):
     try:
-        await _send_vocabulary(
+        await _send_practice_log(
             callback.from_user.id,
             send_fn=None,
-            tab="active",
+            tab="mistakes",
             edit_msg=lambda text, **kw: callback.message.edit_text(text, **kw)
         )
         await callback.answer()
     except Exception as e:
-        logger.error(f"Error in cq_show_vocab: {e}")
-        await callback.answer("Error loading vocabulary.", show_alert=True)
+        logger.error(f"Error in cq_show_practice_log: {e}")
+        await callback.answer("Error loading Practice Log.", show_alert=True)
 
-@router.callback_query(F.data.startswith("vocab_tab_"))
-async def cq_vocab_tab(callback: CallbackQuery):
+@router.callback_query(F.data.startswith("practice_tab_"))
+async def cq_practice_tab(callback: CallbackQuery):
     try:
         tab = callback.data.split("_")[2]
-        await _send_vocabulary(
+        await _send_practice_log(
             callback.from_user.id,
             send_fn=None,
             tab=tab,
@@ -712,12 +687,12 @@ async def cq_vocab_tab(callback: CallbackQuery):
         )
         await callback.answer()
     except Exception as e:
-        logger.error(f"Error in vocab_tab: {e}")
+        logger.error(f"Error in practice_tab: {e}")
         await callback.answer("Error.", show_alert=True)
 
-@router.message(Command("vocabulary"))
-async def cmd_vocabulary(message: Message):
-    await _send_vocabulary(message.from_user.id, send_fn=message.answer, tab="active")
+@router.message(Command("practice"))
+async def cmd_practice(message: Message):
+    await _send_practice_log(message.from_user.id, send_fn=message.answer, tab="mistakes")
 
 @router.callback_query(F.data.startswith("howto_translate_"))
 async def howto_translate(callback: CallbackQuery):
