@@ -237,10 +237,11 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
             user = await db.get_or_create_user(user_id)
             notif = user.get("notifications_enabled", True)
             practice = user.get("vocab_practice_enabled", False)
+            mistakes = user.get("mistakes_practice_enabled", False)
             await callback.message.edit_text(
                 f"👤 Now talking to {display_name}.\n\n⚙️ <b>Settings</b>",
                 parse_mode="HTML",
-                reply_markup=get_settings_keyboard(notif, user_id, practice)
+                reply_markup=get_settings_keyboard(notif, user_id, practice, mistakes)
             )
             await callback.answer()
             return
@@ -465,7 +466,19 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
                     parse_mode="HTML"
                 )
 
-        if user.get("vocab_practice_enabled", False):
+        if user.get("mistakes_practice_enabled", False):
+            errors = await db.get_top_errors_with_examples(user_id, limit=3)
+            if errors:
+                persona_key = user.get("persona", "mrs_smith")
+                persona_prompt = get_persona_tutor_prompt(persona_key)
+                mistakes_response = await groq_client.generate_mistakes_practice_response(
+                    persona_prompt=persona_prompt,
+                    history=history,
+                    errors=errors,
+                )
+                if mistakes_response:
+                    chat_response = mistakes_response
+        elif user.get("vocab_practice_enabled", False):
             practice_words = await db.get_user_vocabulary(user_id, tab="active", limit=10)
             if practice_words:
                 persona_key = user.get("persona", "mrs_smith")
