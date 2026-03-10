@@ -442,18 +442,95 @@ You are an elite ESL Professor with 15+ years of experience. Your goal is to ana
         persona_key: str,
         stats: Dict[str, Any]
     ) -> str:
+        import random
+
         persona_prompt = get_persona_prompt(persona_key)
-        
-        system = f"{persona_prompt}\nWrite a short warm re-engagement message mentioning their streak or vocab progress."
+
+        topic_pools = {
+            "greg": [
+                "You just finished a long shift and grabbed food on the way home.",
+                "You're watching a Celtics game and it's going badly.",
+                "You tried a new recipe from Mark and it actually worked.",
+                "You had a weird case today you can't stop thinking about.",
+                "You're procrastinating on studying and your phone is right there.",
+            ],
+            "mark": [
+                "You just closed the kitchen after a rough service.",
+                "You got a new seasonal ingredient and you're already planning something.",
+                "You had a customer tonight who actually knew what they were eating.",
+                "You've been thinking about a dish you want to put on the menu.",
+                "Summer called earlier and it got you in a good mood.",
+            ],
+            "junior": [
+                "Leo just said something hilarious at dinner.",
+                "You've been debugging the same thing for two hours and need a break.",
+                "Pixel knocked your coffee off the desk and you're not even mad.",
+                "You just read something about AI that genuinely surprised you.",
+                "Jane made you step away from the computer and you actually feel better.",
+            ],
+            "mrs_smith": [
+                "You just finished grading and made yourself a cup of tea.",
+                "You walked home through the park and it was unusually quiet.",
+                "One of your students said something today that stuck with you.",
+                "You've been reading something good and wanted someone to talk to about it.",
+                "Your garden has something new coming up and you noticed it this morning.",
+            ],
+            "summer": [
+                "You just landed somewhere new and the light here is incredible.",
+                "You found a tiny café nobody knows about and you're sitting in it right now.",
+                "You had a conversation with a stranger today that changed your afternoon.",
+                "You're packing for the next trip and can't decide what to leave behind.",
+                "You called Mark earlier and now you're missing home a little.",
+            ],
+            "jane": [
+                "Both boys are finally asleep and you have five minutes to yourself.",
+                "You saw something at the grocery store that made you think of a campaign idea.",
+                "Junior said something ridiculous today and you're still laughing about it.",
+                "You've been half-planning something and wanted to think it through out loud.",
+                "You made a really good coffee this morning and the house was quiet for once.",
+            ],
+        }
+
+        topics = topic_pools.get(persona_key, topic_pools["greg"])
+        topic = random.choice(topics)
+
+        # Статистика — только ненулевые факты, не больше одного
+        stat_hints = []
+        if stats.get("vocabulary_count", 0) > 0:
+            stat_hints.append(f"they have {stats['vocabulary_count']} words saved")
+        if stats.get("mastered_count", 0) > 0:
+            stat_hints.append(f"they've mastered {stats['mastered_count']} of them")
+        if stats.get("msgs_this_week", 0) > 0:
+            stat_hints.append(f"they sent {stats['msgs_this_week']} messages this week")
+
+        stat_line = ""
+        if stat_hints:
+            chosen_stat = random.choice(stat_hints)
+            stat_line = (
+                f"\nOptionally, if it fits naturally, you can mention that {chosen_stat}. "
+                f"Only use it if it flows — don't force it."
+            )
+
+        system = (
+            f"{persona_prompt}\n\n"
+            f"# SITUATION\n"
+            f"{topic}\n\n"
+            f"Write a short natural message to the user checking in — 1 to 3 sentences. "
+            f"Speak as yourself in this moment. Don't be a coach or tutor. "
+            f"Don't use emojis. Don't sound like a notification. "
+            f"Just a real person reaching out."
+            f"{stat_line}"
+        )
+
         async def _notify(client):
             response = await client.chat.completions.create(
                 model="meta-llama/llama-4-scout-17b-16e-instruct",
                 messages=[
                     {"role": "system", "content": system},
-                    {"role": "user", "content": "[write the re-engagement message]"}
+                    {"role": "user", "content": "[write the message]"}
                 ],
-                temperature=0.85,
-                max_tokens=150
+                temperature=0.9,
+                max_tokens=120
             )
             return response.choices[0].message.content.strip()
 
