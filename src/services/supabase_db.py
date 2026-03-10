@@ -49,11 +49,9 @@ class SupabaseDB:
                 "free_messages_used": 0,
                 "notifications_enabled": True,
                 "vocab_practice_enabled": True,
-                "mistakes_practice_enabled": False,
                 "correction_rate": settings.CORRECTION_RATE_DEFAULT,
                 "session_count": 0,
-                "last_active": datetime.utcnow().isoformat(),
-                "weekly_report_sent_at": None
+                "last_active": datetime.utcnow().isoformat()
             }
             response = self.client.table("users").insert(user_data).execute()
             return response.data[0]
@@ -79,73 +77,6 @@ class SupabaseDB:
         except Exception as e:
             logger.error(f"Error toggling vocab practice: {e}")
             return None
-
-    async def toggle_mistakes_practice_mode(self, telegram_id: int) -> Optional[bool]:
-        try:
-            user = await self.get_or_create_user(telegram_id)
-            current_state = user.get("mistakes_practice_enabled", False)
-            new_state = not current_state
-            await self.update_user(telegram_id, {"mistakes_practice_enabled": new_state})
-            return new_state
-        except Exception as e:
-            logger.error(f"Error toggling mistakes practice: {e}")
-            return None
-
-    async def get_top_errors_with_examples(self, user_id: int, limit: int = 3) -> List[Dict[str, Any]]:
-        """Возвращает топ ошибок с примерами фраз пользователя."""
-        try:
-            response = (self.client.table("errors")
-                        .select("category, mistake_text")
-                        .eq("user_id", user_id)
-                        .execute())
-            if not response.data:
-                return []
-
-            counts: Dict[str, Dict] = {}
-            for row in response.data:
-                cat = row.get("category", "other")
-                if not cat or cat.lower() == "none":
-                    continue
-                if cat not in counts:
-                    counts[cat] = {"count": 0, "examples": []}
-                counts[cat]["count"] += 1
-                mt = row.get("mistake_text", "").strip()
-                if mt and len(counts[cat]["examples"]) < 2:
-                    counts[cat]["examples"].append(mt)
-
-            sorted_cats = sorted(counts.items(), key=lambda x: x[1]["count"], reverse=True)
-            return [
-                {"category": cat, "count": data["count"], "examples": data["examples"]}
-                for cat, data in sorted_cats[:limit]
-            ]
-        except Exception as e:
-            logger.error(f"Error getting top errors with examples: {e}")
-            return []
-
-    async def get_users_for_weekly_report(self) -> List[Dict[str, Any]]:
-        """Пользователи которым нужно отправить еженедельный отчёт."""
-        try:
-            week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-            response = (self.client.table("users")
-                        .select("*")
-                        .eq("notifications_enabled", True)
-                        .execute())
-            users = response.data or []
-            result = []
-            for u in users:
-                sent_at = u.get("weekly_report_sent_at")
-                if not sent_at or sent_at < week_ago:
-                    result.append(u)
-            return result
-        except Exception as e:
-            logger.error(f"Error getting users for weekly report: {e}")
-            return []
-
-    async def mark_weekly_report_sent(self, telegram_id: int) -> bool:
-        return await self.update_user(
-            telegram_id,
-            {"weekly_report_sent_at": datetime.now(timezone.utc).isoformat()}
-        )
 
     async def update_user_level(self, telegram_id: int, level: str) -> bool:
         return await self.update_user(telegram_id, {"level": level})
@@ -320,7 +251,6 @@ class SupabaseDB:
                 "user_id": user_id,
                 "role": role,
                 "content": content,
-                "tokens": tokens
             }
             self.client.table("messages").insert(data).execute()
         except Exception as e:
