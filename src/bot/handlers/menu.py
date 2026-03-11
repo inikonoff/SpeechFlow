@@ -83,7 +83,7 @@ def trend_arrow(current: int, previous: int) -> str:
 
 @router.message(Command("stats"))
 async def cmd_stats(message: Message):
-    await _send_stats(message.from_user.id, message.answer)
+    await _send_stats(message, message.from_user.id, edit=False)
 
 @router.message(Command("settings"))
 async def cmd_settings(message: Message):
@@ -177,24 +177,25 @@ def get_stats_keyboard(message_id: int, mode: str = "quick") -> InlineKeyboardMa
     builder.row(InlineKeyboardButton(text="🌐 Translate", callback_data=f"stats_translate_{message_id}_{mode}"))
     return builder.as_markup()
 
-async def _send_stats(user_id: int, send_fn, edit_msg=None):
+async def _send_stats(message, user_id: int, edit: bool = False):
     try:
         stats = await db.get_user_stats(user_id)
         _cache_stats(user_id, stats)
         text = _build_quick_stats(stats)
 
-        if edit_msg:
-            sent = await edit_msg(text, parse_mode="HTML", reply_markup=None)
+        if edit:
+            sent = await safe_edit_text(message, text, parse_mode="HTML", reply_markup=None)
         else:
-            sent = await send_fn(text, parse_mode="HTML")
+            sent = await message.answer(text, parse_mode="HTML")
 
         await safe_edit_reply_markup(sent, reply_markup=get_stats_keyboard(sent.message_id, "quick"))
     except Exception as e:
         logger.error(f"Error in stats: {e}")
-        if edit_msg:
-            await edit_msg("Error loading stats.", parse_mode="HTML")
+        err_text = "Error loading stats."
+        if edit:
+            await safe_edit_text(message, err_text, parse_mode="HTML")
         else:
-            await send_fn("Error loading stats.", parse_mode="HTML")
+            await message.answer(err_text, parse_mode="HTML")
 
 # ─── Practice Log helpers ──────────────────────────────────────────────────
 
@@ -254,7 +255,8 @@ def _build_practice_text(errors: list, tab: str, auto_practice: bool = False) ->
         text += "\n"
     return text
 
-async def _send_practice_log(user_id: int, send_fn, tab: str = "mistakes", edit_msg=None):
+async def _send_practice_log(message, user_id: int, tab: str = "mistakes", edit: bool = False):
+    """message — aiogram Message объект. edit=True → edit_text, False → answer."""
     try:
         errors = await db.get_user_errors(user_id, tab=tab)
         user = await db.get_or_create_user(user_id)
@@ -262,22 +264,19 @@ async def _send_practice_log(user_id: int, send_fn, tab: str = "mistakes", edit_
         text = _build_practice_text(errors, tab, auto_practice=auto_practice)
         kb = _practice_tab_keyboard(tab, auto_practice=auto_practice)
 
-        if edit_msg:
-            await edit_msg(text, parse_mode="HTML", reply_markup=kb)
+        if edit:
+            await safe_edit_text(message, text, parse_mode="HTML", reply_markup=kb)
         else:
-            await send_fn(text, parse_mode="HTML", reply_markup=kb)
+            await message.answer(text, parse_mode="HTML", reply_markup=kb)
     except Exception as e:
-        err = str(e)
-        if "message is not modified" in err:
-            return  # контент не изменился — не ошибка
         import traceback
         logger.error(f"Error in practice log: {e}\n{traceback.format_exc()}")
         try:
-            msg = "⚠️ Error loading Mistakes Practice."
-            if edit_msg:
-                await edit_msg(msg, parse_mode="HTML")
-            elif send_fn:
-                await send_fn(msg, parse_mode="HTML")
+            err_text = "⚠️ Error loading Mistakes Practice."
+            if edit:
+                await safe_edit_text(message, err_text, parse_mode="HTML")
+            else:
+                await message.answer(err_text, parse_mode="HTML")
         except Exception:
             pass
 
@@ -590,11 +589,7 @@ async def set_correction_rate(callback: CallbackQuery):
 @router.callback_query(F.data == "my_stats")
 async def cq_show_stats(callback: CallbackQuery):
     try:
-        await _send_stats(
-            callback.from_user.id,
-            send_fn=callback.message.answer,
-            edit_msg=lambda text, **kw: safe_edit_text(callback.message, text, **kw)
-        )
+        await _send_stats(callback.message, callback.from_user.id, edit=True)
         await callback.answer()
     except Exception as e:
         logger.error(f"Error in cq_show_stats: {e}")
@@ -698,12 +693,7 @@ async def cq_toggle_mistakes_practice(callback: CallbackQuery):
         # Определяем текущий таб по тексту сообщения
         msg_text = callback.message.text or ""
         tab = "mastered" if "Mastered" in msg_text and "·" in msg_text else "mistakes"
-        await _send_practice_log(
-            user_id,
-            send_fn=None,
-            tab=tab,
-            edit_msg=lambda text, **kw: safe_edit_text(callback.message, text, **kw)
-        )
+        await _send_practice_log(callback.message, user_id, tab=tab, edit=True)
     except Exception as e:
         logger.error(f"Error toggling mistakes practice: {e}")
         await callback.answer("Error.", show_alert=True)
@@ -711,12 +701,7 @@ async def cq_toggle_mistakes_practice(callback: CallbackQuery):
 @router.callback_query(F.data == "my_practice_log")
 async def cq_show_practice_log(callback: CallbackQuery):
     try:
-        await _send_practice_log(
-            callback.from_user.id,
-            send_fn=None,
-            tab="mistakes",
-            edit_msg=lambda text, **kw: safe_edit_text(callback.message, text, **kw)
-        )
+        await _send_practice_log(callback.message, callback.from_user.id, tab="mistakes", edit=True)
         await callback.answer()
     except Exception as e:
         logger.error(f"Error in cq_show_practice_log: {e}")
@@ -726,12 +711,7 @@ async def cq_show_practice_log(callback: CallbackQuery):
 async def cq_practice_tab(callback: CallbackQuery):
     try:
         tab = callback.data.split("_")[2]
-        await _send_practice_log(
-            callback.from_user.id,
-            send_fn=None,
-            tab=tab,
-            edit_msg=lambda text, **kw: safe_edit_text(callback.message, text, **kw)
-        )
+        await _send_practice_log(callback.message, callback.from_user.id, tab=tab, edit=True)
         await callback.answer()
     except Exception as e:
         logger.error(f"Error in practice_tab: {e}")
@@ -739,7 +719,7 @@ async def cq_practice_tab(callback: CallbackQuery):
 
 @router.message(Command("practice"))
 async def cmd_practice(message: Message):
-    await _send_practice_log(message.from_user.id, send_fn=message.answer, tab="mistakes")
+    await _send_practice_log(message, message.from_user.id, tab="mistakes", edit=False)
 
 @router.callback_query(F.data.startswith("howto_translate_"))
 async def howto_translate(callback: CallbackQuery):
