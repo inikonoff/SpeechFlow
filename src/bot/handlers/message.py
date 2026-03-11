@@ -32,6 +32,7 @@ from src.modes import (
     get_penfriend_system_prompt,
     CORRECTION_RATE_DEFAULT,
 )
+from src.utils.tg_helpers import safe_edit_text, safe_edit_reply_markup, safe_edit_caption
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -204,7 +205,7 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
             from src.bot.keyboards import get_settings_keyboard
             user = await db.get_or_create_user(user_id)
             notif = user.get("notifications_enabled", True)
-            await callback.message.edit_text(
+            await safe_edit_text(callback.message, 
                 f"👤 Now talking to {display_name}.\n\n⚙️ <b>Settings</b>",
                 parse_mode="HTML",
                 reply_markup=get_settings_keyboard(notif, user_id)
@@ -224,7 +225,7 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
         user_level = user.get("level", "intermediate")
         existing_summary = await db.get_latest_summary(user_id)
 
-        await callback.message.edit_text("...")
+        await safe_edit_text(callback.message, "...")
 
         if switch_context:
             greeting = await groq_client.generate_switch_opener(
@@ -260,12 +261,12 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
                     reply_markup=get_flow_voice_keyboard(0)
                 )
                 _cache_original(sent.message_id, greeting)
-                await sent.edit_reply_markup(reply_markup=get_flow_voice_keyboard(sent.message_id))
+                await safe_edit_reply_markup(sent, reply_markup=get_flow_voice_keyboard(sent.message_id))
         else:
             safe_greeting = html.escape(greeting)
             sent = await callback.message.answer(f"💬 {safe_greeting}", parse_mode="HTML")
             _cache_original(sent.message_id, greeting)
-            await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
+            await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
 
         await callback.answer()
 
@@ -366,7 +367,7 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             await asyncio.sleep(delay)
             sent = await message.answer(f"💬 {chat_response_display}", parse_mode="HTML")
             _cache_original(sent.message_id, chat_response_clean)
-            await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
+            await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
         else:
             voice_bytes = await groq_client.text_to_speech(chat_response_clean, voice=voice)
             if voice_bytes:
@@ -377,7 +378,7 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
                     reply_markup=get_flow_voice_keyboard(0)
                 )
                 _cache_original(sent.message_id, chat_response_clean)
-                await sent.edit_reply_markup(reply_markup=get_flow_voice_keyboard(sent.message_id))
+                await safe_edit_reply_markup(sent, reply_markup=get_flow_voice_keyboard(sent.message_id))
 
         if is_farewell:
             asyncio.create_task(run_summarization(user_id))
@@ -497,11 +498,11 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
                     reply_markup=get_flow_voice_keyboard(0)
                 )
                 _cache_original(sent_voice.message_id, chat_response_clean)
-                await sent_voice.edit_reply_markup(reply_markup=get_flow_voice_keyboard(sent_voice.message_id))
+                await safe_edit_reply_markup(sent_voice, reply_markup=get_flow_voice_keyboard(sent_voice.message_id))
         else:
             sent = await message.answer(f"💬 {chat_response_display}", parse_mode="HTML")
             _cache_original(sent.message_id, chat_response_clean)
-            await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
+            await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
 
         # Блок коррекции — отдельным сообщением после ответа
         safe_corrected = html.escape(analysis_data.get("corrected_sentence", ""))
@@ -564,7 +565,7 @@ async def handle_translate(callback: CallbackQuery):
                     if "translate_" not in btn.callback_data and "original_" not in btn.callback_data:
                         builder.row(btn)
 
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message, 
             f"🌐 {safe_translation}",
             parse_mode="HTML",
             reply_markup=builder.as_markup()
@@ -597,7 +598,7 @@ async def handle_original(callback: CallbackQuery):
                     if "translate_" not in btn.callback_data and "original_" not in btn.callback_data:
                         builder.row(btn)
 
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message, 
             f"💬 {safe_original}",
             parse_mode="HTML",
             reply_markup=builder.as_markup()
@@ -618,7 +619,7 @@ async def flow_show_text(callback: CallbackQuery):
             await callback.answer("Text not available.", show_alert=True)
             return
         safe_text = html.escape(original)
-        await callback.message.edit_caption(
+        await safe_edit_caption(callback.message, 
             caption=f"💬 {safe_text}",
             parse_mode="HTML",
             reply_markup=get_flow_voice_text_keyboard(message_id)
@@ -638,7 +639,7 @@ async def flow_translate(callback: CallbackQuery):
             return
         translation = await groq_client.translate_text(original)
         safe_translation = html.escape(translation)
-        await callback.message.edit_caption(
+        await safe_edit_caption(callback.message, 
             caption=f"🌐 {safe_translation}",
             parse_mode="HTML",
             reply_markup=get_flow_voice_translate_keyboard(message_id)
@@ -657,7 +658,7 @@ async def flow_original(callback: CallbackQuery):
             await callback.answer("Text not available.", show_alert=True)
             return
         persona_display = callback.message.caption.split("\n")[0] if callback.message.caption else ""
-        await callback.message.edit_caption(
+        await safe_edit_caption(callback.message, 
             caption=persona_display,
             reply_markup=get_flow_voice_keyboard(message_id)
         )
@@ -685,7 +686,7 @@ async def uvoice_show_text(callback: CallbackQuery):
             f"✅ <b>Correct</b>\n{safe_corrected}\n\n"
             f"💡 <b>Why</b>\n{safe_explanation}"
         )
-        await callback.message.edit_text(text, parse_mode="HTML")
+        await safe_edit_text(callback.message, text, parse_mode="HTML")
         await callback.answer()
     except Exception as e:
         logger.error(f"Error in uvoice_text callback: {e}")
@@ -701,7 +702,7 @@ async def uvoice_translate(callback: CallbackQuery):
             return
         translation = await groq_client.translate_text(user_text)
         safe_translation = html.escape(translation)
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message, 
             f"🌐 <i>{safe_translation}</i>",
             parse_mode="HTML"
         )
