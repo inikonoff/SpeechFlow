@@ -28,6 +28,7 @@ from src.bot.keyboards import (
 from src.personas import get_all_personas
 from src.services.supabase_db import db
 from src.services.groq_client import groq_client
+from src.utils.tg_helpers import safe_edit_text, safe_edit_reply_markup, safe_edit_caption
 from src.config import ADMIN_IDS
 
 router = Router()
@@ -187,7 +188,7 @@ async def _send_stats(user_id: int, send_fn, edit_msg=None):
         else:
             sent = await send_fn(text, parse_mode="HTML")
 
-        await sent.edit_reply_markup(reply_markup=get_stats_keyboard(sent.message_id, "quick"))
+        await safe_edit_reply_markup(sent, reply_markup=get_stats_keyboard(sent.message_id, "quick"))
     except Exception as e:
         logger.error(f"Error in stats: {e}")
         if edit_msg:
@@ -199,8 +200,12 @@ async def _send_stats(user_id: int, send_fn, edit_msg=None):
 
 PRACTICE_TAB_LABELS = {"mistakes": "📖 Mistakes", "mastered": "✅ Mastered"}
 
-def _practice_tab_keyboard(current_tab: str) -> InlineKeyboardMarkup:
+def _practice_tab_keyboard(current_tab: str, auto_practice: bool = False) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    # Тогл Auto-practice
+    toggle_text = "🔔 Auto-practice in Tutor: ON" if auto_practice else "🔕 Auto-practice in Tutor: OFF"
+    builder.row(InlineKeyboardButton(text=toggle_text, callback_data="toggle_mistakes_practice"))
+    # Табы
     tabs = ["mistakes", "mastered"]
     row = []
     for t in tabs:
@@ -209,48 +214,62 @@ def _practice_tab_keyboard(current_tab: str) -> InlineKeyboardMarkup:
     builder.row(*row)
     return builder.as_markup()
 
-def _build_practice_text(errors: list, tab: str) -> str:
-    tab_label = PRACTICE_TAB_LABELS.get(tab, "📋 Mistakes Practice")
+def _build_practice_text(errors: list, tab: str, auto_practice: bool = False) -> str:
     if not errors:
-        empty_msgs = {
-            "mistakes": "No active mistakes yet — keep chatting and they'll appear here.",
-            "mastered": "Nothing mastered yet — keep practicing!",
-        }
-        return f"📋 <b>Mistakes Practice — {tab_label}</b>\n\n{empty_msgs.get(tab, '')}\n\n<i>Mistakes are tracked automatically from your conversations.</i>"
+        if tab == "mistakes":
+            body = (
+                "No mistakes logged yet.\n\n"
+                "Keep chatting in Tutor Mode — Mrs. Smith will track your grammar patterns automatically."
+            )
+        else:
+            body = "Nothing mastered yet. Keep practicing and mistakes will move here once you nail them."
+        return f"📋 <b>Mistakes Practice</b>\n\n{body}"
 
-    text = f"📋 <b>Mistakes Practice — {tab_label}</b>  <i>({len(errors)} patterns)</i>\n\n"
+    if tab == "mistakes":
+        intro = (
+            "These are your active grammar patterns. "
+            "Turn on <b>Auto-practice</b> and Mrs. Smith will naturally model the correct form in every reply — "
+            "no interruptions, just exposure. Once you use a pattern correctly {threshold} times, it moves to Mastered."
+        ).format(threshold=ERROR_MASTERY_THRESHOLD)
+    else:
+        intro = f"Patterns you've nailed — used correctly {ERROR_MASTERY_THRESHOLD}+ times. Nice work."
+
+    text = f"📋 <b>Mistakes Practice</b>  <i>({len(errors)})</i>\n\n{intro}\n\n"
     for i, item in enumerate(errors, 1):
         category  = html.escape(item.get("category")  or "unknown")
         mistake   = html.escape(item.get("mistake_text")   or "")
         corrected = html.escape(item.get("corrected_text") or "")
         score     = item.get("mastery_score", 0) or 0
-        times     = item.get("times_corrected", 0) or 0
 
-        mastery_bar = "█" * score + "░" * max(0, ERROR_MASTERY_THRESHOLD - score)
-        text += f"{i}. 📌 <b>{category}</b>\n"
+        text += f"{i}. <b>{category}</b>\n"
         if mistake:
-            short_m = (mistake[:60] + "…") if len(mistake) > 60 else mistake
+            short_m = (mistake[:80] + "…") if len(mistake) > 80 else mistake
             text += f"   ❌ <i>{short_m}</i>\n"
         if corrected:
-            short_c = (corrected[:60] + "…") if len(corrected) > 60 else corrected
+            short_c = (corrected[:80] + "…") if len(corrected) > 80 else corrected
             text += f"   ✅ {short_c}\n"
-        text += f"   <code>{mastery_bar}</code>  {score}/{ERROR_MASTERY_THRESHOLD}"
-        if times > 0:
-            text += f"  ·  corrected {times}×"
-        text += "\n\n"
+        if tab == "mistakes":
+            dots = "●" * score + "○" * max(0, ERROR_MASTERY_THRESHOLD - score)
+            text += f"   {dots}\n"
+        text += "\n"
     return text
 
 async def _send_practice_log(user_id: int, send_fn, tab: str = "mistakes", edit_msg=None):
     try:
         errors = await db.get_user_errors(user_id, tab=tab)
-        text = _build_practice_text(errors, tab)
-        kb = _practice_tab_keyboard(tab)
+        user = await db.get_or_create_user(user_id)
+        auto_practice = user.get("mistakes_practice_enabled", False)
+        text = _build_practice_text(errors, tab, auto_practice=auto_practice)
+        kb = _practice_tab_keyboard(tab, auto_practice=auto_practice)
 
         if edit_msg:
             await edit_msg(text, parse_mode="HTML", reply_markup=kb)
         else:
             await send_fn(text, parse_mode="HTML", reply_markup=kb)
     except Exception as e:
+        err = str(e)
+        if "message is not modified" in err:
+            return  # контент не изменился — не ошибка
         import traceback
         logger.error(f"Error in practice log: {e}\n{traceback.format_exc()}")
         try:
@@ -267,10 +286,10 @@ async def _send_practice_log(user_id: int, send_fn, tab: str = "mistakes", edit_
 @router.callback_query(F.data == "how_to_use")
 async def show_how_to_use(callback: CallbackQuery):
     try:
-        sent = await callback.message.edit_text(HOW_TO_TEXT, parse_mode="HTML")
+        sent = await safe_edit_text(callback.message, HOW_TO_TEXT, parse_mode="HTML")
         if len(_how_to_originals) > 1000: _how_to_originals.clear()
         _how_to_originals[sent.message_id] = HOW_TO_TEXT
-        await sent.edit_reply_markup(reply_markup=get_translate_keyboard(sent.message_id))
+        await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
         await callback.answer()
     except Exception as e:
         logger.error(f"Error showing how to use: {e}")
@@ -281,7 +300,7 @@ async def show_settings(callback: CallbackQuery):
     try:
         user = await db.get_or_create_user(callback.from_user.id)
         notif = user.get("notifications_enabled", True)
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message, 
             "⚙️ <b>Settings</b>",
             parse_mode="HTML",
             reply_markup=get_settings_keyboard(notif, callback.from_user.id)
@@ -301,7 +320,7 @@ async def toggle_notifications(callback: CallbackQuery):
         status = "ON 🔔" if new_value else "OFF 🔕"
         await callback.answer(f"Notifications {status}", show_alert=False)
 
-        await callback.message.edit_reply_markup(
+        await safe_edit_reply_markup(callback.message, 
             reply_markup=get_settings_keyboard(new_value, callback.from_user.id)
         )
     except Exception as e:
@@ -310,13 +329,13 @@ async def toggle_notifications(callback: CallbackQuery):
 
 @router.callback_query(F.data == "change_level")
 async def cq_change_level(callback: CallbackQuery):
-    await callback.message.edit_text("Select your English level:", reply_markup=get_level_keyboard())
+    await safe_edit_text(callback.message, "Select your English level:", reply_markup=get_level_keyboard())
     await callback.answer()
 
 @router.callback_query(F.data == "back_to_menu")
 async def back_to_menu(callback: CallbackQuery):
     try:
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message, 
             "🏠 <b>Main Menu</b>",
             parse_mode="HTML",
             reply_markup=get_main_menu_keyboard(callback.from_user.id)
@@ -342,7 +361,7 @@ def _admin_only(func):
 @_admin_only
 async def show_admin_panel(callback: CallbackQuery):
     try:
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message, 
             "🔧 <b>Админ-панель</b>\n\nВыберите действие:",
             parse_mode="HTML",
             reply_markup=get_admin_panel_keyboard()
@@ -383,7 +402,7 @@ async def show_admin_stats(callback: CallbackQuery):
             f"🎭 <b>Топ персонажей</b>\n{persona_lines or '  —'}\n"
             f"🗂 <b>Режимы</b>\n{mode_lines or '  —'}"
         )
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message, 
             text,
             parse_mode="HTML",
             reply_markup=get_admin_stats_keyboard()
@@ -399,13 +418,13 @@ async def show_admin_users(callback: CallbackQuery):
     try:
         users = await db.get_all_users()
         if not users:
-            await callback.message.edit_text(
+            await safe_edit_text(callback.message, 
                 "👥 Пользователей пока нет.",
                 reply_markup=get_admin_panel_keyboard()
             )
             await callback.answer()
             return
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message, 
             f"👥 <b>Пользователи</b> ({len(users)})\n\nВыберите для просмотра карточки:",
             parse_mode="HTML",
             reply_markup=get_admin_users_keyboard(users)
@@ -455,7 +474,7 @@ async def show_admin_user_card(callback: CallbackQuery):
             f"📋 Mistakes Practice: <b>{card.get('active_errors_count', 0)}</b> активных · "
             f"<b>{card.get('mastered_errors_count', 0)}</b> освоено"
         )
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message, 
             text,
             parse_mode="HTML",
             reply_markup=get_admin_user_card_keyboard(telegram_id)
@@ -470,7 +489,7 @@ async def back_to_settings(callback: CallbackQuery):
     try:
         user = await db.get_or_create_user(callback.from_user.id)
         notif = user.get("notifications_enabled", True)
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message, 
             "⚙️ <b>Settings</b>",
             parse_mode="HTML",
             reply_markup=get_settings_keyboard(notif, callback.from_user.id)
@@ -485,7 +504,7 @@ async def back_to_settings(callback: CallbackQuery):
 async def start_broadcast(callback: CallbackQuery, state: FSMContext):
     try:
         await state.set_state(AdminState.waiting_broadcast)
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message, 
             "📣 <b>Broadcast</b>\n\n"
             "Напишите сообщение — оно будет отправлено всем пользователям.\n\n"
             "<i>Для отмены напишите /cancel</i>",
@@ -539,7 +558,7 @@ async def show_correction_rate(callback: CallbackQuery):
         from src.modes import correction_rate_label
         user = await db.get_or_create_user(callback.from_user.id)
         rate = user.get("correction_rate", 50)
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message, 
             f"✏️ <b>Correction Sensitivity</b>\n\n"
             f"Current: <b>{correction_rate_label(rate)}</b>\n\n"
             f"😌 <b>Relaxed</b> — only serious errors that confuse native speakers\n"
@@ -560,7 +579,7 @@ async def set_correction_rate(callback: CallbackQuery):
         from src.modes import correction_rate_label
         rate = int(callback.data.split("_")[2])
         await db.update_correction_rate(callback.from_user.id, rate)
-        await callback.message.edit_reply_markup(
+        await safe_edit_reply_markup(callback.message, 
             reply_markup=get_correction_rate_keyboard(rate)
         )
         await callback.answer(f"Set to {correction_rate_label(rate)}")
@@ -574,7 +593,7 @@ async def cq_show_stats(callback: CallbackQuery):
         await _send_stats(
             callback.from_user.id,
             send_fn=callback.message.answer,
-            edit_msg=lambda text, **kw: callback.message.edit_text(text, **kw)
+            edit_msg=lambda text, **kw: safe_edit_text(callback.message, text, **kw)
         )
         await callback.answer()
     except Exception as e:
@@ -593,7 +612,7 @@ async def cq_stats_deep(callback: CallbackQuery):
         safe = html.escape(deep_text)
         msg_id = callback.message.message_id
 
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message, 
             f"📖 <b>Your Progress Report</b>\n\n{safe}",
             parse_mode="HTML",
             reply_markup=get_stats_keyboard(msg_id, "deep")
@@ -611,7 +630,7 @@ async def cq_stats_quick(callback: CallbackQuery):
         text = _build_quick_stats(stats)
         msg_id = callback.message.message_id
 
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message, 
             text,
             parse_mode="HTML",
             reply_markup=get_stats_keyboard(msg_id, "quick")
@@ -632,7 +651,7 @@ async def cq_stats_translate(callback: CallbackQuery):
         safe = html.escape(translation)
         msg_id = callback.message.message_id
 
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message, 
             f"🌐 {safe}",
             parse_mode="HTML",
             reply_markup=get_stats_back_keyboard(msg_id, mode)
@@ -658,7 +677,7 @@ async def cq_stats_original(callback: CallbackQuery):
         else:
             text = _build_quick_stats(stats)
 
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message, 
             text,
             parse_mode="HTML",
             reply_markup=get_stats_keyboard(msg_id, mode)
@@ -668,6 +687,27 @@ async def cq_stats_original(callback: CallbackQuery):
         logger.error(f"Error in stats_original: {e}")
         await callback.answer("Error.", show_alert=True)
 
+@router.callback_query(F.data == "toggle_mistakes_practice")
+async def cq_toggle_mistakes_practice(callback: CallbackQuery):
+    try:
+        new_val = await db.toggle_mistakes_practice(callback.from_user.id)
+        status = "ON 🔔" if new_val else "OFF 🔕"
+        await callback.answer(f"Auto-practice {status}", show_alert=False)
+        # Перерисовываем текущий экран с новым статусом тогла
+        user_id = callback.from_user.id
+        # Определяем текущий таб по тексту сообщения
+        msg_text = callback.message.text or ""
+        tab = "mastered" if "Mastered" in msg_text and "·" in msg_text else "mistakes"
+        await _send_practice_log(
+            user_id,
+            send_fn=None,
+            tab=tab,
+            edit_msg=lambda text, **kw: safe_edit_text(callback.message, text, **kw)
+        )
+    except Exception as e:
+        logger.error(f"Error toggling mistakes practice: {e}")
+        await callback.answer("Error.", show_alert=True)
+
 @router.callback_query(F.data == "my_practice_log")
 async def cq_show_practice_log(callback: CallbackQuery):
     try:
@@ -675,7 +715,7 @@ async def cq_show_practice_log(callback: CallbackQuery):
             callback.from_user.id,
             send_fn=None,
             tab="mistakes",
-            edit_msg=lambda text, **kw: callback.message.edit_text(text, **kw)
+            edit_msg=lambda text, **kw: safe_edit_text(callback.message, text, **kw)
         )
         await callback.answer()
     except Exception as e:
@@ -690,7 +730,7 @@ async def cq_practice_tab(callback: CallbackQuery):
             callback.from_user.id,
             send_fn=None,
             tab=tab,
-            edit_msg=lambda text, **kw: callback.message.edit_text(text, **kw)
+            edit_msg=lambda text, **kw: safe_edit_text(callback.message, text, **kw)
         )
         await callback.answer()
     except Exception as e:
@@ -709,7 +749,7 @@ async def howto_translate(callback: CallbackQuery):
         clean_text = re.sub(r'<[^>]+>', '', original)
         translation = await groq_client.translate_text(clean_text)
         safe_translation = html.escape(translation)
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message, 
             f"🌐 {safe_translation}",
             parse_mode="HTML",
             reply_markup=get_original_keyboard(message_id)
@@ -723,7 +763,7 @@ async def howto_translate(callback: CallbackQuery):
 async def howto_original(callback: CallbackQuery):
     try:
         message_id = int(callback.data.split("_")[2])
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message, 
             HOW_TO_TEXT,
             parse_mode="HTML",
             reply_markup=get_translate_keyboard(message_id)
