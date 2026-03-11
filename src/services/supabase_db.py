@@ -49,6 +49,7 @@ class SupabaseDB:
                 "total_tokens_used": 0,
                 "free_messages_used": 0,
                 "notifications_enabled": True,
+                "mistakes_practice_enabled": False,
                 "correction_rate": settings.CORRECTION_RATE_DEFAULT,
                 "session_count": 0,
                 "last_active": datetime.utcnow().isoformat()
@@ -81,6 +82,12 @@ class SupabaseDB:
 
     async def update_notifications(self, telegram_id: int, enabled: bool) -> bool:
         return await self.update_user(telegram_id, {"notifications_enabled": enabled})
+
+    async def toggle_mistakes_practice(self, telegram_id: int) -> bool:
+        user = await self.get_or_create_user(telegram_id)
+        new_val = not user.get("mistakes_practice_enabled", False)
+        await self.update_user(telegram_id, {"mistakes_practice_enabled": new_val})
+        return new_val
 
     async def update_correction_rate(self, telegram_id: int, rate: int) -> bool:
         return await self.update_user(telegram_id, {"correction_rate": rate})
