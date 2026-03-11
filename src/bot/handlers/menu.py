@@ -50,8 +50,8 @@ Pure voice conversation with a character. No corrections, no analysis — just r
 Greg 🧑‍⚕️ · Mark 👨‍🍳 · Junior 👨‍💻 · Mrs. Smith 👩‍🏫 · Summer 🌍 · Jane ☕
 Six people, one small world. Each remembers your conversations.
 
-<b>📋 Practice Log &amp; Stats</b>
-Your mistakes are tracked automatically. Use /stats to see your progress and /practice to review your error patterns.
+<b>📋 Mistakes Practice &amp; Stats</b>
+Your mistakes are tracked automatically. Open ⚙️ Settings → Mistakes Practice to review your patterns, or use /stats for progress.
 
 💡 Flow Mode is where real fluency happens — use it often."""
 
@@ -210,28 +210,30 @@ def _practice_tab_keyboard(current_tab: str) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 def _build_practice_text(errors: list, tab: str) -> str:
-    tab_label = PRACTICE_TAB_LABELS.get(tab, "📋 Practice Log")
+    tab_label = PRACTICE_TAB_LABELS.get(tab, "📋 Mistakes Practice")
     if not errors:
         empty_msgs = {
             "mistakes": "No active mistakes yet — keep chatting and they'll appear here.",
             "mastered": "Nothing mastered yet — keep practicing!",
         }
-        return f"📋 <b>Practice Log — {tab_label}</b>\n\n{empty_msgs.get(tab, '')}\n\n<i>Mistakes are tracked automatically from your conversations.</i>"
+        return f"📋 <b>Mistakes Practice — {tab_label}</b>\n\n{empty_msgs.get(tab, '')}\n\n<i>Mistakes are tracked automatically from your conversations.</i>"
 
-    text = f"📋 <b>Practice Log — {tab_label}</b>  <i>({len(errors)} patterns)</i>\n\n"
+    text = f"📋 <b>Mistakes Practice — {tab_label}</b>  <i>({len(errors)} patterns)</i>\n\n"
     for i, item in enumerate(errors, 1):
-        category = html.escape(item.get("category", ""))
-        mistake = html.escape(item.get("mistake_text", ""))
-        corrected = html.escape(item.get("corrected_text", ""))
-        score = item.get("mastery_score", 0)
-        times = item.get("times_corrected", 0)
+        category  = html.escape(item.get("category")  or "unknown")
+        mistake   = html.escape(item.get("mistake_text")   or "")
+        corrected = html.escape(item.get("corrected_text") or "")
+        score     = item.get("mastery_score", 0) or 0
+        times     = item.get("times_corrected", 0) or 0
 
-        mastery_bar = "█" * score + "░" * (ERROR_MASTERY_THRESHOLD - score)
+        mastery_bar = "█" * score + "░" * max(0, ERROR_MASTERY_THRESHOLD - score)
         text += f"{i}. 📌 <b>{category}</b>\n"
         if mistake:
-            text += f"   ❌ <i>{mistake[:60] + '…' if len(mistake) > 60 else mistake}</i>\n"
+            short_m = (mistake[:60] + "…") if len(mistake) > 60 else mistake
+            text += f"   ❌ <i>{short_m}</i>\n"
         if corrected:
-            text += f"   ✅ {corrected[:60] + '…' if len(corrected) > 60 else corrected}\n"
+            short_c = (corrected[:60] + "…") if len(corrected) > 60 else corrected
+            text += f"   ✅ {short_c}\n"
         text += f"   <code>{mastery_bar}</code>  {score}/{ERROR_MASTERY_THRESHOLD}"
         if times > 0:
             text += f"  ·  corrected {times}×"
@@ -249,11 +251,16 @@ async def _send_practice_log(user_id: int, send_fn, tab: str = "mistakes", edit_
         else:
             await send_fn(text, parse_mode="HTML", reply_markup=kb)
     except Exception as e:
-        logger.error(f"Error in practice log: {e}")
-        if edit_msg:
-            await edit_msg("Error loading Practice Log.", parse_mode="HTML")
-        else:
-            await send_fn("Error loading Practice Log.", parse_mode="HTML")
+        import traceback
+        logger.error(f"Error in practice log: {e}\n{traceback.format_exc()}")
+        try:
+            msg = "⚠️ Error loading Mistakes Practice."
+            if edit_msg:
+                await edit_msg(msg, parse_mode="HTML")
+            elif send_fn:
+                await send_fn(msg, parse_mode="HTML")
+        except Exception:
+            pass
 
 # ─── Callbacks ─────────────────────────────────────────────────────────────
 
@@ -445,7 +452,7 @@ async def show_admin_user_card(callback: CallbackQuery):
             f"🔥 Streak: <b>{streak} дн.</b>\n\n"
             f"💬 Сообщений всего: <b>{card.get('msgs_total', 0)}</b>\n"
             f"📈 За неделю: <b>{card.get('msgs_week', 0)}</b>\n\n"
-            f"📋 Practice Log: <b>{card.get('active_errors_count', 0)}</b> активных · "
+            f"📋 Mistakes Practice: <b>{card.get('active_errors_count', 0)}</b> активных · "
             f"<b>{card.get('mastered_errors_count', 0)}</b> освоено"
         )
         await callback.message.edit_text(
@@ -673,7 +680,7 @@ async def cq_show_practice_log(callback: CallbackQuery):
         await callback.answer()
     except Exception as e:
         logger.error(f"Error in cq_show_practice_log: {e}")
-        await callback.answer("Error loading Practice Log.", show_alert=True)
+        await callback.answer("Error loading Mistakes Practice.", show_alert=True)
 
 @router.callback_query(F.data.startswith("practice_tab_"))
 async def cq_practice_tab(callback: CallbackQuery):
