@@ -928,6 +928,79 @@ User stats:
             logger.error(f"❌ Ошибка generate_tutor_response: {e}")
             return "Tell me more — I'm listening."
 
+
+    async def generate_drill_invite(
+        self,
+        user_text: str,
+        corrected_sentence: str,
+        explanation: str,
+    ) -> str:
+        prompt = (
+            'Student said: ' + user_text + '\n'
+            'Correction: ' + corrected_sentence + '\n'
+            'Error note: ' + explanation + '\n\n'
+            'Invite the student to try again with the correct form. '
+            '1-2 sentences, warm and natural, do not repeat the correction.'
+        )
+        async def _drill(client):
+            response = await client.chat.completions.create(
+                model='meta-llama/llama-4-scout-17b-16e-instruct',
+                messages=[
+                    {'role': 'system', 'content': (
+                        'You are Mrs. Smith, a warm British English teacher. '
+                        'Be encouraging and natural. Vary your phrasing. '
+                        'Never be robotic. Max 2 sentences.'
+                    )},
+                    {'role': 'user', 'content': prompt}
+                ],
+                temperature=0.9,
+                max_tokens=80
+            )
+            return response.choices[0].message.content.strip()
+        try:
+            return await self._make_request(_drill)
+        except Exception as e:
+            logger.error(f'generate_drill_invite error: {e}')
+            return 'Now try saying that again with the correct form!'
+
+    async def evaluate_drill(
+        self,
+        original_mistake: str,
+        corrected_target: str,
+        student_attempt: str,
+    ) -> dict:
+        prompt = (
+            'Original mistake: ' + original_mistake + '\n'
+            'Target correction: ' + corrected_target + '\n'
+            'Student attempt: ' + student_attempt
+        )
+        async def _eval(client):
+            response = await client.chat.completions.create(
+                model='meta-llama/llama-4-scout-17b-16e-instruct',
+                messages=[
+                    {'role': 'system', 'content': (
+                        'You are Mrs. Smith evaluating a student drill. '
+                        'Did the student use the correct grammar pattern? '
+                        'Be generous: core pattern correct = success even if wording differs. '
+                        'Reply ONLY with JSON: {"success": true/false, "feedback": "1-2 sentences"}. '
+                        'If success: praise warmly, vary phrases, do not always say Well done. '
+                        'If fail: gently note what is still wrong, encourage one more try. '
+                        'Feedback in English only.'
+                    )},
+                    {'role': 'user', 'content': prompt}
+                ],
+                temperature=0.3,
+                max_tokens=120,
+                response_format={'type': 'json_object'}
+            )
+            raw = response.choices[0].message.content.strip()
+            return json.loads(raw)
+        try:
+            return await self._make_request(_eval)
+        except Exception as e:
+            logger.error(f'evaluate_drill error: {e}')
+            return {'success': False, 'feedback': 'Good try! Give it one more go.'}
+
     async def process_user_message(
         self,
         telegram_id: int,
