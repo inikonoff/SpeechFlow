@@ -5,7 +5,7 @@ import re
 from aiogram import Router, F
 from aiogram.types import Message, BufferedInputFile, CallbackQuery
 from aiogram.fsm.context import FSMContext
-from src.bot.handlers.states import FlowState
+from src.bot.handlers.states import FlowState, TutorState
 from typing import Dict, Any
 
 from src.config import settings, ADMIN_IDS
@@ -391,8 +391,75 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
 
 # ─── Tutor Mode message handler ───────────────────────────────────────────────
 
+
+@router.message(TutorState.awaiting_drill)
+async def handle_drill_attempt(message: Message, state: FSMContext, user: Dict[str, Any] = None):
+    """Обрабатывает попытку юзера повторить исправленное предложение."""
+    try:
+        user_id = message.from_user.id
+        if user is None:
+            user = await db.get_or_create_user(user_id)
+
+        if message.voice:
+            await message.bot.send_chat_action(user_id, "typing")
+            voice_file = await message.bot.get_file(message.voice.file_id)
+            voice_bytes = await message.bot.download_file(voice_file.file_path)
+            attempt_text = await transcribe_voice_with_groq(voice_bytes.read())
+            if not attempt_text:
+                await message.answer("Couldn't hear that clearly. Try again.")
+                return
+            safe_said = html.escape(attempt_text)
+            await message.answer(f"🎤 <i>You said:</i> {safe_said}", parse_mode="HTML")
+        elif message.text:
+            attempt_text = message.text.strip()
+            BUTTON_TEXTS = {"🎓 Tutor", "✉️ PenFriend", "🎙 Flow", "⏹ Stop Flow", "⏹ Stop Tutor", "⏹ Stop PenFriend", "↩ Switch"}
+            if attempt_text in BUTTON_TEXTS or attempt_text.startswith("/"):
+                await state.clear()
+                return
+        else:
+            return
+
+        fsm_data = await state.get_data()
+        drill_mistake = fsm_data.get("drill_mistake", "")
+        drill_target = fsm_data.get("drill_target", "")
+        drill_attempts = fsm_data.get("drill_attempts", 0)
+
+        result = await groq_client.evaluate_drill(
+            original_mistake=drill_mistake,
+            corrected_target=drill_target,
+            student_attempt=attempt_text,
+        )
+
+        success = result.get("success", False)
+        feedback = html.escape(result.get("feedback", "Good effort!"))
+
+        if success:
+            # Засчитываем mastery если есть активная ошибка
+            practice_error = await db.get_error_for_practice(user_id)
+            if practice_error:
+                asyncio.create_task(db.increase_error_mastery(practice_error["id"]))
+            await message.answer(f"✅ {feedback}", parse_mode="HTML")
+            await state.clear()
+        else:
+            drill_attempts += 1
+            if drill_attempts >= 2:
+                # После 2 неудачных попыток — отпускаем без давления
+                await message.answer(
+                    f"💬 {feedback}\n\n<i>We'll keep working on it — no rush.</i>",
+                    parse_mode="HTML"
+                )
+                await state.clear()
+            else:
+                await state.update_data(drill_attempts=drill_attempts)
+                await message.answer(f"💬 {feedback}", parse_mode="HTML")
+
+    except Exception as e:
+        logger.error(f"Error in drill attempt: {e}")
+        await state.clear()
+        await message.answer("Let's keep going.", parse_mode="HTML")
+
 @router.message()
-async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin: bool = False):
+async def handle_message(message: Message, state: FSMContext, user: Dict[str, Any] = None, is_admin: bool = False):
     try:
         user_id = message.from_user.id
         is_voice_input = False
@@ -457,7 +524,7 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
             history=history,
             summary=summary,
             topics=topics,
-            practice_error=practice_error,  # передаём ошибку в process_user_message
+            practice_error=practice_error if user.get('mistakes_practice_enabled') else None,
         )
 
         # Детектим правильное употребление — увеличиваем mastery ошибки
@@ -505,8 +572,10 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
             await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
 
         # Блок коррекции — отдельным сообщением после ответа
-        safe_corrected = html.escape(analysis_data.get("corrected_sentence", ""))
-        safe_explanation = html.escape(analysis_data.get("explanation", ""))
+        raw_corrected = analysis_data.get("corrected_sentence", "")
+        raw_explanation = analysis_data.get("explanation", "")
+        safe_corrected = html.escape(raw_corrected)
+        safe_explanation = html.escape(raw_explanation)
         has_correction = bool(safe_corrected and safe_corrected.strip() != html.escape(user_text).strip())
         if has_correction or safe_explanation:
             analysis_lines = []
@@ -515,6 +584,21 @@ async def handle_message(message: Message, user: Dict[str, Any] = None, is_admin
             if safe_explanation:
                 analysis_lines.append(f"💡 {safe_explanation}")
             await message.answer("\n\n".join(analysis_lines), parse_mode="HTML")
+
+        # Drill — предлагаем повторить если была реальная ошибка
+        if has_correction and raw_corrected and raw_explanation:
+            drill_invite = await groq_client.generate_drill_invite(
+                user_text=user_text,
+                corrected_sentence=raw_corrected,
+                explanation=raw_explanation,
+            )
+            await message.answer(f"🔁 {html.escape(drill_invite)}", parse_mode="HTML")
+            await state.set_state(TutorState.awaiting_drill)
+            await state.update_data(
+                drill_mistake=user_text,
+                drill_target=raw_corrected,
+                drill_attempts=0,
+            )
 
         if is_farewell:
             asyncio.create_task(run_summarization(user_id))
