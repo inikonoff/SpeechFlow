@@ -296,6 +296,23 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             )
             return
 
+                # 👇 НОВЫЙ БЛОК: ЗАЩИТА FLOW MODE 👇
+        if active_mode == MODE_FLOW and message.text:
+            # Пропускаем нажатия на кнопки меню и команды, чтобы бот не ругался на них
+            BUTTON_TEXTS = {"🎓 Tutor", "✉️ PenFriend", "🎙 Flow", "⏹ Stop Flow", "⏹ Stop Tutor", "⏹ Stop PenFriend", "↩ Switch"}
+            if message.text.strip() in BUTTON_TEXTS or message.text.startswith("/"):
+                return
+            
+            # Если это обычный текст — бьем по рукам
+            await message.answer(
+                "🎙 <b>Flow Mode is a voice-only zone!</b>\n\n"
+                "This mode is designed to help you break the language barrier. "
+                "No typing allowed — just hold the microphone icon and speak your mind!\n\n"
+                "<i>(If you prefer texting, please switch to PenFriend or Tutor mode)</i>",
+                parse_mode="HTML"
+            )
+            return
+
         if message.voice:
             await message.bot.send_chat_action(user_id, "typing")
             voice_file = await message.bot.get_file(message.voice.file_id)
