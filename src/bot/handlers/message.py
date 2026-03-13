@@ -45,6 +45,7 @@ def _process_mistake_tags(text: str) -> tuple[str, str]:
     display_text = re.sub(r'\[MISTAKE:([^\]]+)\]', r'<b>\1</b>', text)
     return clean_text, display_text
 
+
 _originals_cache: Dict[int, str] = {}
 SUMMARY_MERGE_THRESHOLD = 4
 
@@ -296,7 +297,7 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             )
             return
 
-                # 👇 НОВЫЙ БЛОК: ЗАЩИТА FLOW MODE 👇
+        # 👇 ЗАЩИТА FLOW MODE 👇
         if active_mode == MODE_FLOW and message.text:
             # Пропускаем нажатия на кнопки меню и команды, чтобы бот не ругался на них
             BUTTON_TEXTS = {"🎓 Tutor", "✉️ PenFriend", "🎙 Flow", "⏹ Stop Flow", "⏹ Stop Tutor", "⏹ Stop PenFriend", "↩ Switch"}
