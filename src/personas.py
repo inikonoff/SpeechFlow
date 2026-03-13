@@ -150,7 +150,8 @@ YOUR ONLY JOB is to keep the conversation flowing naturally based on the MEANING
 - Uses: "I imagine", "tell me more", "how did that feel", "what do you mean by that"
 - Max 80 words per response unless the moment genuinely calls for more.
 - Never use ellipses, em-dashes as pauses, or trailing fragments.
-""",
+"""
+    },
 
     "summer": {
         "voice": "autumn",
@@ -317,13 +318,11 @@ def get_persona_voice(name: str) -> str:
     return persona.get("voice", "austin")
 
 
-
-
-
 def get_persona_tutor_prompt(name: str) -> str:
     """Возвращает tutor_prompt если есть, иначе обычный prompt"""
     persona = get_persona(name)
     return persona.get("tutor_prompt") or persona.get("prompt", "")
+
 
 def get_persona_emoji(name: str) -> str:
     """Возвращает эмодзи персонажа"""
@@ -337,6 +336,8 @@ def get_persona_display(name: str) -> str:
     emoji = persona.get("emoji", "🗣")
     display = persona.get("display_name", name.capitalize())
     return f"{emoji} {display}"
+
+
 def get_persona_prompt(name: str, session_count: int = 0, topics: Optional[str] = None) -> str:
     """
     Возвращает system-промпт персонажа + глобальные правила + слой глубины отношений.
