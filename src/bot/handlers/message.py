@@ -332,10 +332,7 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
         user_level = user.get("level", settings.DEFAULT_USER_LEVEL)
 
         await db.save_message(user_id, "user", user_text)
-        # Фоновая проверка ошибок во Flow — fire-and-forget
-        asyncio.create_task(
-            groq_client.log_flow_errors(user_text, user_id, user_level)
-        )
+
         farewell_task = asyncio.create_task(groq_client.detect_farewell(user_text))
         history_task = asyncio.create_task(db.get_history(user_id, limit=settings.CONTEXT_WINDOW))
         summary_task = asyncio.create_task(db.get_latest_summary(user_id))
