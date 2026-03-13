@@ -13,8 +13,65 @@ logger = logging.getLogger(__name__)
 CHECK_INTERVAL_SECONDS = 3600
 
 async def send_re_engagement_notifications(bot: Bot) -> None:
-    # ... (Оставьте вашу текущую функцию send_re_engagement_notifications без изменений) ...
-    pass # Вставьте сюда ваш код функции send_re_engagement_notifications из оригинального файла
+    """
+    Отправляет напоминания пользователям, которые не заходили более 23.5 часов
+    """
+    try:
+        users = await db.get_users_for_notification()
+        if not users:
+            logger.info("📬 No users for re-engagement notifications")
+            return
+
+        logger.info(f"📬 Sending re-engagement notifications to {len(users)} users")
+
+        for user in users:
+            try:
+                telegram_id = user.get("telegram_id")
+                username = user.get("username", "there")
+                persona = user.get("persona", "greg")
+                
+                # Получаем слово для напоминания из словаря
+                word = await db.get_word_for_reminder(telegram_id)
+                
+                if word:
+                    # Если есть слово для практики
+                    word_phrase = word.get("word_or_phrase", "")
+                    translation = word.get("translation", "")
+                    
+                    message = (
+                        f"👋 Hey {username}! Ready for a quick language boost?\n\n"
+                        f"📚 Word of the day: *{word_phrase}*\n"
+                        f"📖 Translation: {translation}\n\n"
+                        f"Try using it in a sentence! 💪"
+                    )
+                    
+                    # Отмечаем, что слово было напомнено
+                    await db.mark_word_reminded(word["id"])
+                else:
+                    # Общее мотивирующее сообщение
+                    message = (
+                        f"👋 Hey {username}! Your language skills are waiting for you.\n\n"
+                        f"Just 5 minutes of practice can make a big difference. "
+                        f"Ready to continue our conversation? 🚀"
+                    )
+                
+                await bot.send_message(
+                    chat_id=telegram_id,
+                    text=message,
+                    parse_mode="Markdown"
+                )
+                
+                # Обновляем время последней активности
+                await db.mark_user_notified(telegram_id)
+                
+                logger.info(f"✅ Re-engagement notification sent to {telegram_id}")
+                await asyncio.sleep(1.0)  # Небольшая задержка между сообщениями
+                
+            except Exception as e:
+                logger.error(f"❌ Failed to send re-engagement to {user.get('telegram_id')}: {e}")
+                
+    except Exception as e:
+        logger.error(f"❌ Error in re-engagement scheduler: {e}")
 
 async def send_weekly_deep_dive_reports(bot: Bot) -> None:
     """
