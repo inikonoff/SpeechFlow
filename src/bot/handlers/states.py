@@ -13,7 +13,3 @@ class FlowState(StatesGroup):
 
 class AdminState(StatesGroup):
     waiting_broadcast = State()
-
-
-class TutorState(StatesGroup):
-    awaiting_drill = State()   # ждём повтор после коррекции
