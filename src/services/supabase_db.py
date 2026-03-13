@@ -384,8 +384,10 @@ class SupabaseDB:
         """Логирует ошибку. Если такая категория уже есть — обновляет mistake_text и corrected_text."""
         try:
             category = error_data.get("category", "other")
-            mistake_text = error_data.get("mistake_text", "")
+            mistake_text = error_data.get("mistake_text", error_data.get("original_text", ""))
             corrected_text = error_data.get("corrected_text", "")
+            source = error_data.get("source", "tutor")
+            original_text = error_data.get("original_text", mistake_text)
 
             # Проверяем есть ли уже такая категория у юзера (не mastered)
             existing = (self.client.table("error_logs")
@@ -402,6 +404,8 @@ class SupabaseDB:
                 self.client.table("error_logs").update({
                     "mistake_text": mistake_text,
                     "corrected_text": corrected_text,
+                    "source": source,
+                    "original_text": original_text,
                 }).eq("id", row_id).execute()
             else:
                 self.client.table("error_logs").insert({
@@ -411,6 +415,8 @@ class SupabaseDB:
                     "corrected_text": corrected_text,
                     "mastery_score": 0,
                     "times_corrected": 0,
+                    "source": source,
+                    "original_text": original_text,
                 }).execute()
             return True
         except Exception as e:
@@ -512,6 +518,85 @@ class SupabaseDB:
         except Exception as e:
             logger.error(f"Error getting weekly errors: {e}")
             return []
+
+    async def get_flow_users_for_weekly_report(self) -> List[Dict[str, Any]]:
+        """Пользователи у которых есть Flow-ошибки за последние 7 дней и ещё не получали отчёт на этой неделе."""
+        try:
+            cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
+            # Берём user_id из error_logs с source='flow' за последнюю неделю
+            response = (self.client.table("error_logs")
+                        .select("user_id")
+                        .eq("source", "flow")
+                        .gte("created_at", cutoff)
+                        .execute())
+            if not response.data:
+                return []
+            user_ids = list({row["user_id"] for row in response.data})
+            # Получаем данные пользователей
+            users_resp = (self.client.table("users")
+                          .select("telegram_id, persona, voice, weekly_report_sent_at")
+                          .in_("telegram_id", user_ids)
+                          .execute())
+            if not users_resp.data:
+                return []
+            # Фильтруем тех кто уже получил отчёт на этой неделе
+            result = []
+            week_ago = datetime.utcnow() - timedelta(days=7)
+            for u in users_resp.data:
+                sent_at = u.get("weekly_report_sent_at")
+                if sent_at:
+                    try:
+                        sent_dt = datetime.fromisoformat(sent_at.replace("Z", "+00:00")).replace(tzinfo=None)
+                        if sent_dt > week_ago:
+                            continue
+                    except Exception:
+                        pass
+                result.append(u)
+            return result
+        except Exception as e:
+            logger.error(f"Error getting flow users for report: {e}")
+            return []
+
+    async def get_flow_errors_for_report(self, user_id: int) -> List[Dict[str, Any]]:
+        """Flow-ошибки за последние 7 дней для конкретного пользователя."""
+        try:
+            cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
+            response = (self.client.table("error_logs")
+                        .select("category, original_text, corrected_text")
+                        .eq("user_id", user_id)
+                        .eq("source", "flow")
+                        .gte("created_at", cutoff)
+                        .execute())
+            if not response.data:
+                return []
+            grouped: Dict[str, Dict] = {}
+            for row in response.data:
+                cat = row.get("category", "other")
+                if cat.lower() == "none":
+                    continue
+                if cat not in grouped:
+                    grouped[cat] = {
+                        "category": cat,
+                        "original": row.get("original_text", ""),
+                        "corrected": row.get("corrected_text", ""),
+                        "count": 0,
+                    }
+                grouped[cat]["count"] += 1
+            # Сортируем по частоте, топ-3
+            sorted_errors = sorted(grouped.values(), key=lambda x: x["count"], reverse=True)
+            return sorted_errors[:3]
+        except Exception as e:
+            logger.error(f"Error getting flow errors for report: {e}")
+            return []
+
+    async def mark_weekly_report_sent(self, user_id: int) -> None:
+        """Отмечаем что отчёт отправлен."""
+        try:
+            self.client.table("users").update({
+                "weekly_report_sent_at": datetime.utcnow().isoformat()
+            }).eq("telegram_id", user_id).execute()
+        except Exception as e:
+            logger.error(f"Error marking weekly report sent: {e}")
 
 
 db = SupabaseDB()
