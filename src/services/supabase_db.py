@@ -376,14 +376,12 @@ class SupabaseDB:
             logger.error(f"Error getting user stats: {e}")
             return {"user": {"level": "unknown", "persona": "greg", "streak_days": 0}}
 
-async def log_error(self, user_id: int, error_data: Dict[str, str]) -> bool:
+    async def log_error(self, user_id: int, error_data: Dict[str, str]) -> bool:
         try:
             data = {
                 "user_id": user_id,
                 "category": error_data.get("category", "other"),
-                "mistake_text": error_data.get("mistake_text", ""),
-                "corrected_text": error_data.get("corrected_text", ""),
-                "source": error_data.get("source", "tutor")
+                "mistake_text": error_data.get("mistake_text", "")
             }
             self.client.table("errors").insert(data).execute()
             return True
@@ -522,170 +520,5 @@ async def log_error(self, user_id: int, error_data: Dict[str, str]) -> bool:
         except Exception as e:
             logger.error(f"Error marking word reminded: {e}")
             return False
-    async def get_flow_users_for_weekly_report(self) -> List[Dict[str, Any]]:
-        """Пользователи, у которых есть Flow-ошибки за последние 7 дней и которые еще не получали отчёт."""
-        try:
-            cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
-            
-            # Ищем уникальных пользователей с ошибками source='flow' за неделю
-            response = (self.client.table("errors")
-                        .select("user_id")
-                        .eq("source", "flow")
-                        .gte("created_at", cutoff)
-                        .execute())
-            if not response.data:
-                return []
-                
-            user_ids = list({row["user_id"] for row in response.data})
-            
-            users_resp = (self.client.table("users")
-                          .select("telegram_id, persona, weekly_report_sent_at")
-                          .in_("telegram_id", user_ids)
-                          .execute())
-            
-            if not users_resp.data:
-                return []
-                
-            # Фильтруем тех, кому уже отправляли отчет на этой неделе
-            result = []
-            week_ago = datetime.utcnow() - timedelta(days=7)
-            for u in users_resp.data:
-                sent_at = u.get("weekly_report_sent_at")
-                if sent_at:
-                    try:
-                        sent_dt = datetime.fromisoformat(sent_at.replace("Z", "+00:00")).replace(tzinfo=None)
-                        if sent_dt > week_ago:
-                            continue
-                    except Exception:
-                        pass
-                result.append(u)
-            return result
-        except Exception as e:
-            logger.error(f"Error getting flow users for report: {e}")
-            return []
 
-    async def get_flow_errors_for_report(self, user_id: int) -> List[Dict[str, Any]]:
-        """Получает топ-3 ошибки Flow Mode за неделю для конкретного юзера."""
-        try:
-            cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
-            response = (self.client.table("errors")
-                        .select("category, mistake_text, corrected_text")
-                        .eq("user_id", user_id)
-                        .eq("source", "flow")
-                        .gte("created_at", cutoff)
-                        .execute())
-            if not response.data:
-                return []
-                
-            grouped: Dict[str, Dict] = {}
-            for row in response.data:
-                cat = row.get("category", "other")
-                if cat.lower() == "none": continue
-                if cat not in grouped:
-                    grouped[cat] = {
-                        "category": cat,
-                        "original": row.get("mistake_text", ""),
-                        "corrected": row.get("corrected_text", ""),
-                        "count": 0,
-                    }
-                grouped[cat]["count"] += 1
-                
-            # Сортируем по частоте и берем топ-3
-            sorted_errors = sorted(grouped.values(), key=lambda x: x["count"], reverse=True)
-            return sorted_errors[:3]
-        except Exception as e:
-            logger.error(f"Error getting flow errors for report: {e}")
-            return []
-
-    async def mark_weekly_report_sent(self, user_id: int) -> None:
-        """Отмечает время отправки воскресного отчета."""
-        try:
-            self.client.table("users").update({
-                "weekly_report_sent_at": datetime.utcnow().isoformat()
-            }).eq("telegram_id", user_id).execute()
-        except Exception as e:
-            logger.error(f"Error marking weekly report sent: {e}")
-    async def get_flow_users_for_weekly_report(self) -> List[Dict[str, Any]]:
-        """Пользователи, у которых есть Flow-ошибки за последние 7 дней и которые еще не получали отчёт."""
-        try:
-            cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
-            
-            # Ищем уникальных пользователей с ошибками source='flow' за неделю
-            response = (self.client.table("errors")
-                        .select("user_id")
-                        .eq("source", "flow")
-                        .gte("created_at", cutoff)
-                        .execute())
-            if not response.data:
-                return []
-                
-            user_ids = list({row["user_id"] for row in response.data})
-            
-            users_resp = (self.client.table("users")
-                          .select("telegram_id, persona, weekly_report_sent_at")
-                          .in_("telegram_id", user_ids)
-                          .execute())
-            
-            if not users_resp.data:
-                return []
-                
-            # Фильтруем тех, кому уже отправляли отчет на этой неделе
-            result = []
-            week_ago = datetime.utcnow() - timedelta(days=7)
-            for u in users_resp.data:
-                sent_at = u.get("weekly_report_sent_at")
-                if sent_at:
-                    try:
-                        sent_dt = datetime.fromisoformat(sent_at.replace("Z", "+00:00")).replace(tzinfo=None)
-                        if sent_dt > week_ago:
-                            continue
-                    except Exception:
-                        pass
-                result.append(u)
-            return result
-        except Exception as e:
-            logger.error(f"Error getting flow users for report: {e}")
-            return []
-
-    async def get_flow_errors_for_report(self, user_id: int) -> List[Dict[str, Any]]:
-        """Получает топ-3 ошибки Flow Mode за неделю для конкретного юзера."""
-        try:
-            cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
-            response = (self.client.table("errors")
-                        .select("category, mistake_text, corrected_text")
-                        .eq("user_id", user_id)
-                        .eq("source", "flow")
-                        .gte("created_at", cutoff)
-                        .execute())
-            if not response.data:
-                return []
-                
-            grouped: Dict[str, Dict] = {}
-            for row in response.data:
-                cat = row.get("category", "other")
-                if cat.lower() == "none": continue
-                if cat not in grouped:
-                    grouped[cat] = {
-                        "category": cat,
-                        "original": row.get("mistake_text", ""),
-                        "corrected": row.get("corrected_text", ""),
-                        "count": 0,
-                    }
-                grouped[cat]["count"] += 1
-                
-            # Сортируем по частоте и берем топ-3
-            sorted_errors = sorted(grouped.values(), key=lambda x: x["count"], reverse=True)
-            return sorted_errors[:3]
-        except Exception as e:
-            logger.error(f"Error getting flow errors for report: {e}")
-            return []
-
-    async def mark_weekly_report_sent(self, user_id: int) -> None:
-        """Отмечает время отправки воскресного отчета."""
-        try:
-            self.client.table("users").update({
-                "weekly_report_sent_at": datetime.utcnow().isoformat()
-            }).eq("telegram_id", user_id).execute()
-        except Exception as e:
-            logger.error(f"Error marking weekly report sent: {e}")
 db = SupabaseDB()
