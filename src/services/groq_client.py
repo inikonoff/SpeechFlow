@@ -8,6 +8,7 @@ from openai import AsyncOpenAI
 
 from src.config import settings
 from src.personas import get_persona_prompt, get_persona_voice, get_persona_tutor_prompt
+from src.services.supabase_db import db
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +147,6 @@ You are a precise ESL grammar checker. Your job is to find the single most impor
     async def log_flow_errors(self, text: str, user_id: int, level: str) -> None:
         """Fire-and-forget: проверяет ошибки во Flow и тихо пишет в БД. Ничего не возвращает юзеру."""
         try:
-            from src.services.supabase_db import db
             result = await self.correct_text(text, level, correction_rate=50)
             error_cat = result.get("error_category", "none")
             if error_cat and error_cat.lower() != "none":
@@ -505,7 +505,6 @@ User Level: {level}"""
             )
             raw = response.choices[0].message.content.strip()
             try:
-                import json
                 parsed = json.loads(raw)
                 return parsed.get("summary", raw), parsed.get("topics_to_discuss", "")
             except Exception:
