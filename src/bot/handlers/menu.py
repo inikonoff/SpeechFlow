@@ -560,9 +560,9 @@ async def show_correction_rate(callback: CallbackQuery):
         await safe_edit_text(callback.message, 
             f"✏️ <b>Correction Sensitivity</b>\n\n"
             f"Current: <b>{correction_rate_label(rate)}</b>\n\n"
-            f"😌 <b>Relaxed</b> — only serious errors that confuse native speakers\n"
-            f"⚖️ <b>Balanced</b> — clear grammatical errors corrected\n"
-            f"🎯 <b>Strict</b> — most errors corrected naturally",
+            f"😌 <b>Relaxed</b> — только грубые ошибки, которые искажают смысл. Артикли и мелкие оговорки игнорируются. Цель — просто разговориться.\n\n"
+            f"⚖️ <b>Balanced</b> — исправляет одну самую главную ошибку в сообщении. Даёт короткое объяснение.\n\n"
+            f"🎯 <b>Strict — Душнила</b> — разбирает всё: от порядка слов до артиклей. Для тех, кто готовится к IELTS.",
             parse_mode="HTML",
             reply_markup=get_correction_rate_keyboard(rate)
         )
