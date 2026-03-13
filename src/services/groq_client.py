@@ -132,7 +132,39 @@ You are an elite ESL Professor with 15+ years of experience. Your goal is to ana
                 "vocabulary_items": [],
                 "error_category": "none"
             }
+    async def log_flow_errors(self, text: str, user_id: int, level: str) -> None:
+        """Fire-and-forget: проверяет ошибки во Flow и тихо пишет в БД. Ничего не возвращает юзеру."""
+        try:
+            # Импортируем локально, чтобы избежать циклических импортов
+            from src.services.supabase_db import db
+            result = await self.correct_text(text, level)
+            error_cat = result.get("error_category", "none")
+            if error_cat and error_cat.lower() != "none":
+                await db.log_error(user_id, {
+                    "category": error_cat,
+                    "mistake_text": text,
+                    "corrected_text": result.get("corrected_sentence", text),
+                    "source": "flow",
+                })
+        except Exception as e:
+            logger.error(f"❌ log_flow_errors: {e}")
 
+    async def generate_simple_text(self, prompt: str, max_tokens: int = 400) -> str:
+        """Универсальный генератор текста по произвольному промпту. Используется для Deep Dive отчётов."""
+        async def _gen(client):
+            response = await client.chat.completions.create(
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7,
+                max_tokens=max_tokens
+            )
+            return response.choices[0].message.content.strip()
+
+        try:
+            return await self._make_request(_gen)
+        except Exception as e:
+            logger.error(f"❌ generate_simple_text error: {e}")
+            return ""
     # ─── Генерация ответа (обычный режим) ──────────────────────────────────
 
     async def generate_response(
