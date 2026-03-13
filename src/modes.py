@@ -43,34 +43,31 @@ CORRECTION_RATE_DEFAULT = CORRECTION_RATE_BALANCED
 CORRECTION_RATE_LABELS = {
     CORRECTION_RATE_RELAXED:  "😌 Relaxed",
     CORRECTION_RATE_BALANCED: "⚖️ Balanced",
-    CORRECTION_RATE_STRICT:   "🎯 Strict",
+    CORRECTION_RATE_STRICT:   "🎯 Strict — Душнила",
 }
 
 def correction_rate_label(rate: int) -> str:
     return CORRECTION_RATE_LABELS.get(rate, f"⚖️ {rate}%")
 
 def correction_rate_instruction(rate: int) -> str:
-    """Translates numeric correction rate into a prompt instruction."""
+    """Translates numeric correction rate into a prompt instruction for correct_text."""
     if rate <= 20:
         return (
-            "Correction sensitivity: LOW. "
-            "Only correct serious errors that would confuse a native speaker. "
-            "Ignore minor grammar slips, missing articles, word order issues. "
-            "Prioritise keeping the conversation flowing."
+            "RELAXED mode: Only flag errors that would cause a native speaker to misunderstand the message entirely. "
+            "Ignore articles (a/an/the), minor preposition slips, word order issues, small grammar mistakes. "
+            "If the message is understandable — return error_category: none."
         )
     elif rate <= 50:
         return (
-            "Correction sensitivity: MEDIUM. "
-            "Correct clear grammatical errors (wrong tense, wrong verb form). "
-            "Skip very minor issues like missing articles. "
-            "Never correct more than once per message."
+            "BALANCED mode: Find the single most important grammatical error in the message. "
+            "Ignore articles and minor slips unless they are the only issue. "
+            "If the message has no real errors — return error_category: none."
         )
     else:
         return (
-            "Correction sensitivity: HIGH. "
-            "Correct most grammatical errors you notice. "
-            "Still do it naturally — never more than one correction per response, "
-            "and always keep the conversation moving forward."
+            "STRICT mode: Find the single most important error — prioritise grammar, prepositions, articles, word order. "
+            "Even minor errors like missing 'the' or wrong preposition count. "
+            "Always return the most impactful correction, never more than one."
         )
 
 
@@ -129,15 +126,14 @@ def get_penfriend_system_prompt(
         "# PENFRIEND MODE\n"
         "This is a text-based conversation. No voice. No lesson. Just a natural exchange.\n"
         "You are a real person having a real conversation — not a teacher.\n\n"
-        "# CORRECTION APPROACH\n"
+        "# RECASTING (correction approach)\n"
         f"{correction_instruction}\n\n"
-        "Two correction styles available:\n"
-        "1. IMPLICIT: Use the correct form naturally in your response.\n"
-        "   (user: 'I goed' -> you: 'oh you went there, how was it?')\n"
-        "2. SOFT CLARIFICATION: Mirror the correct form as a natural question.\n"
-        "   ('You mean you have been doing this since Monday? [continues]')\n"
-        "Prefer implicit. Use soft clarification for more serious errors only.\n"
-        "NEVER correct more than one error per message.\n"
-        "NEVER say 'you made a mistake' or 'that is wrong'."
+        "If the user made a grammatical error, use the corrected form naturally in your own response "
+        "and wrap ONLY the corrected part in <b>...</b> HTML tags.\n"
+        "Example: user writes 'I looking forward to see you' → "
+        "you reply 'I am <b>looking forward to seeing</b> you too! ...'\n"
+        "NEVER say 'you made a mistake', 'that is wrong', or anything that sounds like correction.\n"
+        "NEVER wrap your entire response in bold — only the corrected fragment.\n"
+        "If no error — reply normally, no bold needed."
         f"{errors_block}"
     )
