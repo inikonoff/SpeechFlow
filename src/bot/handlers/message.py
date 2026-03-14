@@ -42,17 +42,21 @@ BUTTON_TEXTS = {
 
 _persona_display_cache: Dict[int, str] = {}
 
-def _cache_persona_display(msg_id: int, persona_display: str):
-    if len(_persona_display_cache) > 5000:
-        _persona_display_cache.clear()
-    _persona_display_cache[msg_id] = persona_display
+def _cache_original(msg_id: int, text: str):
     if len(_originals_cache) > 5000:
         _originals_cache.clear()
     _originals_cache[msg_id] = text
 
+def _cache_persona_display(msg_id: int, persona_display: str):
+    if len(_persona_display_cache) > 5000:
+        _persona_display_cache.clear()
+    _persona_display_cache[msg_id] = persona_display
+
 def _md_bold_to_html(text: str) -> str:
     """Конвертирует **bold** markdown в <b>bold</b> HTML для Telegram."""
     return re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+
+def _penfriend_typing_delay(text: str) -> float:
     words = len(text.split())
     seconds = (words / 55) * 60 * 0.7
     return max(1.4, min(seconds, 6.3))
