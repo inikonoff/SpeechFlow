@@ -182,11 +182,15 @@ async def _send_stats(message, user_id: int, edit: bool = False):
 @router.callback_query(F.data == "how_to_use")
 async def show_how_to_use(callback: CallbackQuery):
     try:
+        from aiogram.utils.keyboard import InlineKeyboardBuilder
+        from aiogram.types import InlineKeyboardButton
         sent = await safe_edit_text(callback.message, HOW_TO_TEXT, parse_mode="HTML")
         if len(_how_to_originals) > 1000:
             _how_to_originals.clear()
         _how_to_originals[sent.message_id] = HOW_TO_TEXT
-        await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
+        builder = InlineKeyboardBuilder()
+        builder.row(InlineKeyboardButton(text="🌐 Translate", callback_data=f"howto_translate_{sent.message_id}"))
+        await safe_edit_reply_markup(sent, reply_markup=builder.as_markup())
         await callback.answer()
     except Exception as e:
         logger.error(f"Error showing how to use: {e}")
@@ -585,36 +589,44 @@ async def cq_stats_original(callback: CallbackQuery):
         logger.error(f"Error in stats_original: {e}")
         await callback.answer("Error.", show_alert=True)
 
-@router.callback_query(F.data.startswith("translate_"))
+@router.callback_query(F.data.startswith("howto_translate_"))
 async def handle_howto_translate(callback: CallbackQuery):
     """Перевод How To Use."""
     try:
-        message_id = int(callback.data.split("_")[1])
+        message_id = int(callback.data.split("_")[2])
         original = _how_to_originals.get(message_id, HOW_TO_TEXT)
         clean_text = re.sub(r'<[^>]+>', '', original)
         translation = await groq_client.translate_text(clean_text)
         safe_translation = html.escape(translation)
+        from aiogram.utils.keyboard import InlineKeyboardBuilder
+        from aiogram.types import InlineKeyboardButton
+        builder = InlineKeyboardBuilder()
+        builder.row(InlineKeyboardButton(text="🔤 Original", callback_data=f"howto_original_{message_id}"))
         await safe_edit_text(
             callback.message,
             f"🌐 {safe_translation}",
             parse_mode="HTML",
-            reply_markup=get_original_keyboard(message_id)
+            reply_markup=builder.as_markup()
         )
         await callback.answer()
     except Exception as e:
         logger.error(f"Error translating how to use: {e}")
         await callback.answer("Translation failed.", show_alert=True)
 
-@router.callback_query(F.data.startswith("original_"))
+@router.callback_query(F.data.startswith("howto_original_"))
 async def handle_howto_original(callback: CallbackQuery):
     """Возврат к оригиналу How To Use."""
     try:
-        message_id = int(callback.data.split("_")[1])
+        message_id = int(callback.data.split("_")[2])
+        from aiogram.utils.keyboard import InlineKeyboardBuilder
+        from aiogram.types import InlineKeyboardButton
+        builder = InlineKeyboardBuilder()
+        builder.row(InlineKeyboardButton(text="🌐 Translate", callback_data=f"howto_translate_{message_id}"))
         await safe_edit_text(
             callback.message,
             HOW_TO_TEXT,
             parse_mode="HTML",
-            reply_markup=get_translate_keyboard(message_id)
+            reply_markup=builder.as_markup()
         )
         await callback.answer()
     except Exception as e:
