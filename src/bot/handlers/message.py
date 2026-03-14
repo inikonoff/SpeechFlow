@@ -367,11 +367,6 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             extra_instruction=extra_instruction
         )
 
-        # Фоновая проверка ошибок во Flow — fire-and-forget
-        asyncio.create_task(
-            groq_client.log_flow_errors(user_text, user_id, user_level)
-        )
-
         # Детектим правильное употребление — увеличиваем mastery ошибки
         if practice_error and practice_error.get("corrected_text"):
             asyncio.create_task(
@@ -446,22 +441,6 @@ async def handle_drill_attempt(message: Message, state: FSMContext, user: Dict[s
         drill_target = fsm_data.get("drill_target", "")
         drill_attempts = fsm_data.get("drill_attempts", 0)
 
-        # Если пользователь явно продолжает разговор (длинное сообщение не про исправление),
-        # или drill уже был показан — просто сбрасываем стейт и пропускаем в обычный обработчик
-        target_words = set(drill_target.lower().split()) if drill_target else set()
-        attempt_words = set(attempt_text.lower().split())
-        overlap = len(target_words & attempt_words)
-        is_continuation = (
-            len(attempt_text.split()) > 12 or          # длинное сообщение — явно разговор
-            (overlap == 0 and len(attempt_text.split()) > 5)  # никакого пересечения с целью
-        )
-
-        if is_continuation:
-            await state.clear()
-            # Передаём в обычный обработчик
-            await handle_message(message, state, user=user)
-            return
-
         result = await groq_client.evaluate_drill(
             original_mistake=drill_mistake,
             corrected_target=drill_target,
@@ -472,6 +451,7 @@ async def handle_drill_attempt(message: Message, state: FSMContext, user: Dict[s
         feedback = html.escape(result.get("feedback", "Good effort!"))
 
         if success:
+            # Засчитываем mastery если есть активная ошибка
             practice_error = await db.get_error_for_practice(user_id)
             if practice_error:
                 asyncio.create_task(db.increase_error_mastery(practice_error["id"]))
@@ -480,6 +460,7 @@ async def handle_drill_attempt(message: Message, state: FSMContext, user: Dict[s
         else:
             drill_attempts += 1
             if drill_attempts >= 2:
+                # После 2 неудачных попыток — отпускаем без давления
                 await message.answer(
                     f"💬 {feedback}\n\n<i>We'll keep working on it — no rush.</i>",
                     parse_mode="HTML"
@@ -547,7 +528,6 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
         )
 
         user_level = user.get("level", settings.DEFAULT_USER_LEVEL)
-        correction_rate = user.get("correction_rate", 50)
         should_reply_voice = (
             settings.VOICE_RESPONSE_MODE == "always" or
             (settings.VOICE_RESPONSE_MODE == "mirror" and is_voice_input)
@@ -562,7 +542,6 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
             summary=summary,
             topics=topics,
             practice_error=practice_error if user.get('mistakes_practice_enabled') else None,
-            correction_rate=correction_rate,
         )
 
         # Детектим правильное употребление — увеличиваем mastery ошибки
@@ -571,14 +550,13 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
                 _check_and_update_error_mastery(user_id, user_text, practice_error)
             )
 
-        # Логируем новую ошибку
+        # Логируем новую ошибку с corrected_text
         error_cat = analysis_data.get("error_category")
         if error_cat and error_cat.lower() != "none":
             asyncio.create_task(db.log_error(user_id, {
                 "category": error_cat,
-                "original_text": user_text,
+                "mistake_text": user_text,
                 "corrected_text": analysis_data.get("corrected_sentence", ""),
-                "source": "tutor",
             }))
 
         await db.increment_user_metrics(user_id, tokens_used=0)
@@ -610,44 +588,19 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
             _cache_original(sent.message_id, chat_response_clean)
             await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
 
-        # ── Карточка коррекции ────────────────────────────────────────────────
-        error_phrase    = analysis_data.get("error_phrase", "")
-        corrected_phrase = analysis_data.get("corrected_phrase", "")
-        raw_corrected   = analysis_data.get("corrected_sentence", "")
+        # Блок коррекции — отдельным сообщением после ответа
+        raw_corrected = analysis_data.get("corrected_sentence", "")
         raw_explanation = analysis_data.get("explanation", "")
-        approval_phrase = analysis_data.get("approval_phrase", "")
-        rate_label      = analysis_data.get("_rate_label", "")
-
-        has_correction = bool(
-            error_phrase and corrected_phrase
-            and error_phrase.strip().lower() != corrected_phrase.strip().lower()
-        )
-
-        if has_correction:
-            # Строим полное исправленное предложение с выделением изменённого фрагмента
-            safe_original = html.escape(user_text)
-            safe_error = html.escape(error_phrase)
-            safe_fix = html.escape(corrected_phrase)
-            safe_full = html.escape(raw_corrected)
-            safe_expl = html.escape(raw_explanation)
-            safe_label = html.escape(rate_label)
-
-            # Подсвечиваем исправленный фрагмент в полном предложении
-            highlighted = safe_full.replace(safe_fix, f"<b>{safe_fix}</b>", 1)
-
-            card_parts = [
-                f"❌ <i>{safe_error}</i>  →  ✅ <b>{safe_fix}</b>",
-                highlighted,
-            ]
-            if safe_expl:
-                card_parts.append(f"💡 {safe_expl}")
-            if safe_label:
-                card_parts.append(f"<i>{safe_label}</i>")
-
-            await message.answer("\n\n".join(card_parts), parse_mode="HTML")
-
-        elif approval_phrase:
-            await message.answer(f"✅ {html.escape(approval_phrase)}", parse_mode="HTML")
+        safe_corrected = html.escape(raw_corrected)
+        safe_explanation = html.escape(raw_explanation)
+        has_correction = bool(safe_corrected and safe_corrected.strip() != html.escape(user_text).strip())
+        if has_correction or safe_explanation:
+            analysis_lines = []
+            if has_correction:
+                analysis_lines.append(f"✍️ <b>{safe_corrected}</b>")
+            if safe_explanation:
+                analysis_lines.append(f"💡 {safe_explanation}")
+            await message.answer("\n\n".join(analysis_lines), parse_mode="HTML")
 
         # Drill — предлагаем повторить если была реальная ошибка
         if has_correction and raw_corrected and raw_explanation:
