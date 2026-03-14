@@ -54,7 +54,7 @@ def _cache_persona_display(msg_id: int, persona_display: str):
 
 def _md_bold_to_html(text: str) -> str:
     """Конвертирует **bold** markdown в <b>bold</b> HTML для Telegram."""
-    return re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+    return re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text, flags=re.DOTALL)
 
 def _penfriend_typing_delay(text: str) -> float:
     words = len(text.split())
@@ -590,7 +590,8 @@ async def handle_translate(callback: CallbackQuery):
             raw = callback.message.text or ""
             original_text = raw.removeprefix("💬 ").strip()
 
-        translation = await groq_client.translate_text(original_text)
+        clean_for_translation = re.sub(r'\*\*(.+?)\*\*', r'\1', original_text, flags=re.DOTALL)
+        translation = await groq_client.translate_text(clean_for_translation)
         safe_translation = html.escape(translation)
 
         from aiogram.utils.keyboard import InlineKeyboardBuilder
