@@ -1,7 +1,6 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from src.config import ADMIN_IDS
-
 from src.personas import get_all_personas
 
 
@@ -39,7 +38,6 @@ def get_main_menu_keyboard(user_id: int = 0) -> InlineKeyboardMarkup:
 
 
 def get_stats_back_keyboard(message_id: int, mode: str) -> InlineKeyboardMarkup:
-    """Кнопка 'оригинал' после перевода статистики."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(
         text="↩ Original",
@@ -83,31 +81,18 @@ def get_admin_user_card_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="← К списку", callback_data="admin_users"))
     return builder.as_markup()
 
-def get_settings_keyboard(notifications_enabled: bool, user_id: int = 0) -> InlineKeyboardMarkup:
-    notif_text = "🔔 Notifications: ON" if notifications_enabled else "🔕 Notifications: OFF"
+
+def get_settings_keyboard(notifications_enabled: bool, recasting_enabled: bool, user_id: int = 0) -> InlineKeyboardMarkup:
+    notif_text   = "🔔 Notifications: ON"  if notifications_enabled else "🔕 Notifications: OFF"
+    recast_text  = "📝 Recasting: ON"      if recasting_enabled     else "📝 Recasting: OFF"
+
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text=notif_text,                  callback_data="toggle_notifications"))
-    builder.row(InlineKeyboardButton(text="📊 Change Level",           callback_data="change_level"))
-    builder.row(InlineKeyboardButton(text="✏️ Correction Sensitivity", callback_data="correction_rate"))
-    builder.row(InlineKeyboardButton(text="📋 Mistakes Practice",      callback_data="my_practice_log"))
+    builder.row(InlineKeyboardButton(text=notif_text,          callback_data="toggle_notifications"))
+    builder.row(InlineKeyboardButton(text=recast_text,         callback_data="toggle_recasting"))
+    builder.row(InlineKeyboardButton(text="📊 Change Level",   callback_data="change_level"))
     if user_id in ADMIN_IDS:
-        builder.row(InlineKeyboardButton(text="🔧 Админ-панель",       callback_data="admin_panel"))
-    builder.row(InlineKeyboardButton(text="← Back",                    callback_data="back_to_menu"))
-    return builder.as_markup()
-
-
-def get_correction_rate_keyboard(current_rate: int) -> InlineKeyboardMarkup:
-    from src.modes import CORRECTION_RATE_RELAXED, CORRECTION_RATE_BALANCED, CORRECTION_RATE_STRICT
-    options = [
-        (CORRECTION_RATE_RELAXED,  "😌 Relaxed"),
-        (CORRECTION_RATE_BALANCED, "⚖️ Balanced"),
-        (CORRECTION_RATE_STRICT,   "🎯 Strict"),
-    ]
-    builder = InlineKeyboardBuilder()
-    for rate, label in options:
-        text = f"✓ {label}" if rate == current_rate else label
-        builder.row(InlineKeyboardButton(text=text, callback_data=f"set_correction_{rate}"))
-    builder.row(InlineKeyboardButton(text="← Back", callback_data="settings"))
+        builder.row(InlineKeyboardButton(text="🔧 Админ-панель", callback_data="admin_panel"))
+    builder.row(InlineKeyboardButton(text="← Back",            callback_data="back_to_menu"))
     return builder.as_markup()
 
 
@@ -123,7 +108,6 @@ def get_back_to_settings_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-
 def get_translate_keyboard(message_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="🌐 Translate", callback_data=f"translate_{message_id}"))
@@ -136,10 +120,9 @@ def get_original_keyboard(message_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-# ─── Reply keyboards (постоянные кнопки внизу) ────────────────────────────
+# ─── Reply keyboards ──────────────────────────────────────────────────────
 
 def get_mode_keyboard() -> ReplyKeyboardMarkup:
-    """Три кнопки режимов — основное состояние"""
     builder = ReplyKeyboardBuilder()
     builder.row(
         KeyboardButton(text="🎓 Tutor"),
@@ -150,7 +133,7 @@ def get_mode_keyboard() -> ReplyKeyboardMarkup:
 
 
 def get_flow_start_keyboard() -> ReplyKeyboardMarkup:
-    """Алиас для обратной совместимости"""
+    """Алиас для обратной совместимости."""
     return get_mode_keyboard()
 
 
@@ -202,6 +185,7 @@ def get_flow_voice_translate_keyboard(message_id: int) -> InlineKeyboardMarkup:
 
 
 def get_flow_user_voice_keyboard(message_id: int) -> InlineKeyboardMarkup:
+    """Кнопки под голосовым сообщением пользователя в Flow Mode."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text="📝 Text",      callback_data=f"uvoice_text_{message_id}"),
