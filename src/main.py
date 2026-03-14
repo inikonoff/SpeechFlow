@@ -58,10 +58,11 @@ request_stats: Dict[str, int] = {
 async def setup_bot_commands(bot: Bot):
     """Установка системного меню слева от поля ввода"""
     bot_commands = [
-        BotCommand(command="/start",    description="Restart / Change Level"),
-        BotCommand(command="/stats",    description="My Stats"),
+        BotCommand(command="/start", description="Restart / Change Level"),
+        BotCommand(command="/stats", description="My Stats"),
+        BotCommand(command="/vocabulary", description="My Vocabulary"),
         BotCommand(command="/settings", description="Settings"),
-        BotCommand(command="/author",   description="Author"),
+        BotCommand(command="/author", description="Author")
     ]
     await bot.set_my_commands(bot_commands)
     logger.info("✅ Bot commands menu installed")
