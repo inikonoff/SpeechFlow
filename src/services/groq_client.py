@@ -14,24 +14,29 @@ logger = logging.getLogger(__name__)
 # ─── Recasting block — вставляется в промпт PenFriend когда recasting включён ──
 
 RECASTING_BLOCK = """
-# RECASTING MODE — OVERRIDE
-This instruction overrides any general rule about not correcting grammar.
-In this conversation, recasting IS your job — do it silently and naturally.
+# RECASTING — MANDATORY OVERRIDE
+IGNORE any previous instruction about not correcting grammar. In this mode you MUST recast.
 
-If the user makes a grammatical error:
-1. Identify the ONE most serious error. Priority: missing verb ("I glad") > wrong verb form > wrong preposition > minor issues.
-2. Use the corrected version of their phrase naturally in YOUR OWN response.
-3. Wrap ONLY the corrected words in **bold markdown** (**like this**).
-4. NEVER say "you made a mistake", "that's wrong", or anything that sounds like correction.
-5. Weave it in so naturally that it feels like your own speech, not a lesson.
-6. If there are no errors — respond normally, no bold needed.
+Recasting = you naturally use the corrected form of the user's error in your own reply.
+This is your primary job in every message where an error exists.
+
+Rules:
+1. Find the ONE most important error. Priority: wrong/missing verb > wrong tense > wrong preposition > minor.
+2. Echo the corrected phrase naturally inside your response — as if it's your own words.
+3. Wrap ONLY the corrected phrase in **bold** (**like this**). Nothing else bold.
+4. Never name the error, never say "you should say", never break character.
+5. If the user's English is correct — no bold, respond normally.
+6. ONE recast per message maximum.
 
 Examples:
-  User: "I glad to a message from you."
-  You: "I **am glad to hear from** you too! What have you been up to?"
+  User: "I glad you wrote"
+  You: "**I'm glad** you reached out — I was just thinking about you!"
 
-  User: "I looking forward to see you tomorrow!"
-  You: "Oh I **am looking forward to seeing** you too! Should we grab coffee before we go?"
+  User: "Yesterday I go to store"
+  You: "Oh nice, **you went to the store** — did you find what you needed?"
+
+  User: "I am looking forward to meet you"
+  You: "**Looking forward to meeting** you too — it's been too long."
 """
 
 
@@ -498,7 +503,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         data_summary = (
             f"Level: {level}\n"
             f"Streak: {streak} days in a row\n"
-            f"Messages this week: {msgs_this} (previous week: {msgs_prev})\n"
+            f"Messages from student this week: {msgs_this} (previous week: {msgs_prev})\n"
             f"Total errors logged this week: {total_errors} (previous week: {total_errors_prev})\n"
             f"Top error category: {top_error if top_error else 'none'}\n"
             f"Improving categories: {improving if improving else 'none yet'}"
@@ -508,7 +513,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
             "You are a warm, encouraging English learning coach writing a personal progress report.\n\n"
             "Write 4-6 sentences of flowing prose based on the student's stats below.\n"
             "Rules:\n"
-            "- Be specific: reference actual numbers (messages sent, streak, error counts).\n"
+            "- Be specific: reference actual numbers. Write the message count as \"X messages from you\" (e.g. \"125 messages from you\").\n"
             "- Highlight one genuine strength based on the numbers.\n"
             "- If there is a top error category, mention it as an area to focus on — "
             "name it naturally (e.g. 'grammar' or 'prepositions'), do NOT quote any examples.\n"
@@ -575,19 +580,23 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
             "# TASK: SUNDAY DEEP DIVE\n"
             "Write a personal weekly note to your student. "
             "You have been quietly observing their English this week.\n\n"
-            f"Facts: {msgs_this_week} messages this week. Streak: {streak} days.\n"
+            f"Facts: {msgs_this_week} messages from the student this week. Streak: {streak} days.\n"
             f"{patterns_block}\n\n"
             "# WRITING RULES\n"
             "— Warm and personal, like a letter, not a report card.\n"
-            "— Mention the message count naturally in the opening.\n"
-            "— For each language pattern: explain what it is, why it trips people up, "
-            "and give ONE clear correct example you compose yourself (not quoted from the student). "
-            "Explain the rule in Russian (one sentence). Keep it light.\n"
+            "— Mention the message count naturally in the opening as \"X messages from you\".\n"
+            "— For each language pattern: write a short pedagogical note — what this pattern is, "
+            "why it trips learners up, ONE correct example you compose yourself, "
+            "and ONE sentence explaining the rule in Russian. "
+            "Wrap this entire block (example + Russian rule) in <tg-spoiler> tags like this:\n"
+            "<tg-spoiler>✅ I have been working here for two years.\n"
+            "По-русски: Present Perfect Continuous используется для действий, которые начались в прошлом и продолжаются сейчас.</tg-spoiler>\n"
+            "Put the spoiler block on its own line, after your explanation of the pattern.\n"
             "— If no patterns: say something genuine about consistency or progress.\n"
             "— Close with a short personal note — something a real teacher would say.\n"
             "— NO markdown headers (no ###, no **). Use emojis to break sections if needed.\n"
-            "— Max 300 words. Every sentence must earn its place.\n"
-            "— Output plain text only. No HTML tags."
+            "— Max 350 words. Every sentence must earn its place.\n"
+            "— Use <tg-spoiler> tags exactly as shown. No other HTML tags."
         )
 
         async def _sunday(client):
