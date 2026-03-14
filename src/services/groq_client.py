@@ -14,17 +14,21 @@ logger = logging.getLogger(__name__)
 # ─── Recasting block — вставляется в промпт PenFriend когда recasting включён ──
 
 RECASTING_BLOCK = """
-# RECASTING INSTRUCTION
-If the user makes a grammatical error, you MUST use the corrected version of their phrase naturally in your own response.
-Rules:
-1. Wrap ONLY the corrected words in **bold markdown** (**like this**).
-2. Choose ONLY ONE error per message — the most important one. Ignore the rest.
-3. NEVER say "you made a mistake", "that's wrong", or anything that sounds like correction.
-4. Weave it in so naturally that it feels like your own speech, not a lesson.
-5. If there are no errors — respond normally, no bold needed.
+# RECASTING MODE — OVERRIDE
+This instruction overrides any general rule about not correcting grammar.
+In this conversation, recasting IS your job — do it silently and naturally.
+
+If the user makes a grammatical error:
+1. Use the corrected version of their phrase naturally in YOUR OWN response.
+2. Wrap ONLY the corrected words in **bold markdown** (**like this**).
+3. Choose ONLY ONE error per message — the most important one. Ignore the rest entirely.
+4. NEVER say "you made a mistake", "that's wrong", or anything that sounds like correction.
+5. Weave it in so naturally that it feels like your own speech, not a lesson.
+6. If there are no errors — respond normally, no bold needed.
+
 Example:
   User: "I looking forward to see you tomorrow!"
-  You: "Oh I **am looking forward to seeing** you too! Do you want to grab coffee before we go?"
+  You: "Oh I **am looking forward to seeing** you too! Should we grab coffee before we go?"
 """
 
 
@@ -473,30 +477,33 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         top_error = max(error_week, key=error_week.get) if error_week else None
         improving = [k for k in error_week if error_prev.get(k, 0) > error_week.get(k, 0)]
+        total_errors = sum(error_week.values()) if error_week else 0
+        total_errors_prev = sum(error_prev.values()) if error_prev else 0
 
         data_summary = (
             f"Level: {level}\n"
             f"Streak: {streak} days in a row\n"
             f"Messages this week: {msgs_this} (previous week: {msgs_prev})\n"
-            f"Error categories this week: {dict(error_week)}\n"
-            f"Improving categories (fewer errors than last week): {improving}\n"
-            f"Top error category: {top_error}"
+            f"Total errors logged this week: {total_errors} (previous week: {total_errors_prev})\n"
+            f"Top error category: {top_error if top_error else 'none'}\n"
+            f"Improving categories: {improving if improving else 'none yet'}"
         )
 
         system = (
             "You are a warm, encouraging English learning coach writing a personal progress report.\n\n"
             "Write 4-6 sentences of flowing prose based on the student's stats below.\n"
             "Rules:\n"
-            "- Be specific: reference actual numbers from the data.\n"
-            "- Highlight one genuine strength.\n"
-            "- Name the main area to work on (use the top error category if available).\n"
-            "- End with one concrete, actionable encouragement.\n"
+            "- Be specific: reference actual numbers (messages sent, streak, error counts).\n"
+            "- Highlight one genuine strength based on the numbers.\n"
+            "- If there is a top error category, mention it as an area to focus on — "
+            "name it naturally (e.g. 'grammar' or 'prepositions'), do NOT quote any examples.\n"
+            "- If errors are improving compared to last week, acknowledge that progress.\n"
+            "- End with one motivating encouragement.\n"
             "- Tone: honest and warm, like a good coach — not a cheerleader, not a report card.\n"
             "- NO headers, NO bullet points, NO markdown, NO ### symbols — pure flowing text only.\n"
             "- Write in English only.\n"
-            "- Do NOT mention the persona names (Greg, Mark, Jane, Mrs_smith etc) — "
-            "those are the student's conversation partners, not their name.\n"
-            "- Do NOT invent data that is not in the stats (no vocabulary counts, no word savings)."
+            "- Do NOT mention persona names (Greg, Mark, Jane, Mrs_smith etc).\n"
+            "- Do NOT invent data not present in the stats (no vocabulary counts, no saved words)."
         )
 
         async def _deep_dive(client):
