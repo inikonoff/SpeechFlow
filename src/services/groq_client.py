@@ -459,12 +459,10 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
     async def generate_stats_deep_dive(self, stats: dict) -> str:
         """
-        Нарративный отчёт по кнопке 'Deep Dive' в /stats.
-        Пишет Mrs. Smith — как учитель разбирает прогресс студента.
+        Нарративный мотивирующий отчёт по кнопке 'Deep Dive' в /stats.
+        Чистая проза, без заголовков и структуры — как на скриншоте.
+        LLM анализирует статистику и пишет личный, конкретный текст.
         """
-        from src.personas import get_persona_tutor_prompt as _get_tutor_prompt
-        mrs_smith_prompt = _get_tutor_prompt("mrs_smith")
-
         user = stats.get("user", {})
         level = str(user.get("level", "unknown")).upper()
         streak = user.get("streak_days", 0)
@@ -477,8 +475,8 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         improving = [k for k in error_week if error_prev.get(k, 0) > error_week.get(k, 0)]
 
         data_summary = (
-            f"Student level: {level}\n"
-            f"Streak: {streak} days\n"
+            f"Level: {level}\n"
+            f"Streak: {streak} days in a row\n"
             f"Messages this week: {msgs_this} (previous week: {msgs_prev})\n"
             f"Error categories this week: {dict(error_week)}\n"
             f"Improving categories (fewer errors than last week): {improving}\n"
@@ -486,15 +484,19 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         )
 
         system = (
-            f"{mrs_smith_prompt}\n\n"
-            "# YOUR TASK\n"
-            "Write a short personal progress report (4-6 sentences) based on the student's data below.\n"
-            "Be specific — reference actual numbers and error categories.\n"
-            "Highlight one strength. Name the main area to work on. End with one concrete tip.\n"
-            "Tone: warm and honest, like a good teacher — not a cheerleader.\n"
-            "Write in English only. No headers, no bullet points — flowing prose.\n"
-            "IMPORTANT: Do NOT address the student by the persona name (Greg, Mark, Jane, etc). "
-            "Those are their conversation partners, not their name."
+            "You are a warm, encouraging English learning coach writing a personal progress report.\n\n"
+            "Write 4-6 sentences of flowing prose based on the student's stats below.\n"
+            "Rules:\n"
+            "- Be specific: reference actual numbers from the data.\n"
+            "- Highlight one genuine strength.\n"
+            "- Name the main area to work on (use the top error category if available).\n"
+            "- End with one concrete, actionable encouragement.\n"
+            "- Tone: honest and warm, like a good coach — not a cheerleader, not a report card.\n"
+            "- NO headers, NO bullet points, NO markdown, NO ### symbols — pure flowing text only.\n"
+            "- Write in English only.\n"
+            "- Do NOT mention the persona names (Greg, Mark, Jane, Mrs_smith etc) — "
+            "those are the student's conversation partners, not their name.\n"
+            "- Do NOT invent data that is not in the stats (no vocabulary counts, no word savings)."
         )
 
         async def _deep_dive(client):
@@ -507,7 +509,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 temperature=0.7,
                 max_tokens=250
             )
-            return response.choices[0].message.content
+            return response.choices[0].message.content.strip()
 
         try:
             return await self._make_request(_deep_dive)
@@ -552,17 +554,17 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
             "# SUNDAY DEEP DIVE\n"
             "You are writing a weekly personal report directly to your student.\n"
             "You have been quietly reviewing their conversations this week.\n\n"
-            f"## Student Activity\n"
-            f"Messages sent this week: {msgs_this_week}\n\n"
-            f"## Language Patterns Noticed\n"
-            f"{errors_block}\n\n"
+            f"Student activity this week: {msgs_this_week} messages sent.\n\n"
+            f"Language patterns noticed:\n{errors_block}\n\n"
             "# YOUR INSTRUCTIONS\n"
-            "1. Open warmly — acknowledge their effort this week with a specific number.\n"
-            "2. For each language pattern: show their example (❌), then show the natural correct version (✅), "
-            "and explain the rule in ONE friendly sentence in Russian.\n"
-            "3. End with a short encouraging note — not generic praise, something that feels personal.\n"
-            "4. Format with emojis for readability. Keep total length under 300 words.\n"
-            "5. Do NOT sound like a school report card. Sound like a teacher who actually knows this student."
+            "1. Open warmly — acknowledge their effort with the specific message count.\n"
+            "2. For each language pattern: show their example (❌), then the correct version (✅), "
+            "then explain the rule in ONE friendly sentence in Russian.\n"
+            "3. End with a short personal encouraging note.\n"
+            "4. Use emojis naturally for readability.\n"
+            "5. CRITICAL: Do NOT use ### or ## or any markdown headers. "
+            "Separate sections with a blank line and an emoji if needed — nothing else.\n"
+            "6. Do NOT sound like a school report card. Sound like a teacher who knows this student."
         )
 
         async def _sunday(client):
