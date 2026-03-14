@@ -188,6 +188,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         history: Optional[List[Dict[str, str]]] = None,
         summary: Optional[str] = None,
         session_count: int = 0,
+        top_errors: Optional[List[str]] = None,
     ) -> str:
         persona_prompt = get_persona_prompt(persona_key, session_count=session_count)
 
@@ -195,6 +196,15 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
             persona_prompt += (
                 f"\n\n# WHAT YOU KNOW ABOUT THIS PERSON\n{summary}\n"
                 f"Use this naturally, never dump it all at once."
+            )
+
+        if top_errors:
+            errors_str = ", ".join(top_errors)
+            persona_prompt += (
+                f"\n\n# LANGUAGE NOTE\n"
+                f"This person often struggles with: {errors_str}. "
+                f"Occasionally use correct examples of these naturally in your own speech — "
+                f"no need to draw attention, just model the right form casually."
             )
 
         messages = [{"role": "system", "content": persona_prompt}]
