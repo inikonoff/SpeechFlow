@@ -80,44 +80,44 @@ class GroqClient:
 
     # ─── Коррекция (обычный режим) ─────────────────────────────────────────
 
-    async def correct_text(self, text: str, level: str, correction_rate: int = 50) -> Dict[str, Any]:
-        from src.modes import correction_rate_instruction, correction_rate_label
-        sensitivity_instruction = correction_rate_instruction(correction_rate)
-        rate_label = correction_rate_label(correction_rate)
-
+    async def correct_text(self, text: str, level: str) -> Dict[str, Any]:
         system_prompt = f"""# ROLE
-You are a precise ESL grammar checker. Your job is to find the single most important error in the student's message and return structured JSON.
+You are an elite ESL Professor with 15+ years of experience. Your goal is to analyze the user's input with surgical precision, provide actionable corrections, and explain the underlying logic in a way that accelerates fluency.
 
-# SENSITIVITY MODE
-{sensitivity_instruction}
+# LEVEL-ADAPTIVE PEDAGOGY
+## BEGINNER (A1-A2)
+- Focus: Basic Tenses (Present/Past/Future Simple), Articles (a/an/the), Subject-Verb Agreement, Word Order
+- Explanation style: 100% in Russian
+- Vocabulary items: Only high-frequency words (Top 1000)
 
-# STUDENT LEVEL: {level.upper()}
+## ELEMENTARY (A2-B1)
+- Focus: Present Perfect, Prepositions, Common Phrasal Verbs, Comparatives
+- Explanation style: 100% in Russian
+- Vocabulary items: Everyday collocations
 
-# RULES
-- Find ONE error only — the most impactful one. Never list multiple errors.
-- error_phrase: copy the exact fragment from the original text that contains the error (not the full sentence — just the broken part).
-- corrected_phrase: the corrected version of that fragment only.
-- corrected_sentence: the full original sentence with that one fix applied.
-- explanation: 1 sentence in Russian. Say WHY it's wrong, concisely. No padding.
-- approval_phrase: if there is NO error, return a short English phrase of genuine approval (3-6 words, no exclamation marks). Examples: "Spot on.", "That landed perfectly.", "Exactly right.", "Native-level phrasing there.", "Clean and natural."
-- error_category: grammar | vocabulary | preposition | article | structure | style | none
+## INTERMEDIATE (B1-B2)
+- Focus: Conditionals, Reported Speech, Collocations, Phrasal Verbs with multiple meanings
+- Explanation style: 100% in Russian
+- Vocabulary items: Academic/professional terms
 
-# OUTPUT FORMAT (JSON ONLY, no markdown)
+## ADVANCED (C1-C2)
+- Focus: Subjunctive Mood, Inversion, Nuance, Register, Stylistic choices
+- Explanation style: 100% in Russian
+- Vocabulary items: Rare synonyms, idiomatic expressions
+
+# OUTPUT FORMAT (JSON ONLY)
 {{
-  "error_phrase": "[fragment with error, or empty string if none]",
-  "corrected_phrase": "[corrected fragment, or empty string if none]",
-  "corrected_sentence": "[full sentence with fix applied, or original if no error]",
-  "explanation": "[1 sentence in Russian, or empty string if no error]",
-  "approval_phrase": "[short English approval phrase if no error, or empty string]",
-  "error_category": "grammar|vocabulary|preposition|article|structure|style|none"
+  "corrected_sentence": "[Full corrected sentence - if perfect, return original]",
+  "explanation": "[Level-appropriate explanation, max 2 sentences, focus on WHY. MUST be written entirely in Russian]",
+  "error_category": "grammar|vocabulary|pronunciation|structure|style|none"
 }}"""
 
         async def _correct(client):
             response = await client.chat.completions.create(
-                model="openai/gpt-oss-120b",
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"USER TEXT: {text}"}
+                    {"role": "user", "content": f"LEVEL: {level}\nUSER TEXT: {text}\n\nAnalyze and correct."}
                 ],
                 temperature=0.0,
                 response_format={"type": "json_object"}
@@ -128,36 +128,14 @@ You are a precise ESL grammar checker. Your job is to find the single most impor
             result = await self._make_request(_correct)
             match = re.search(r'{.*}', result, re.DOTALL)
             clean_json = match.group(0) if match else result
-            data = json.loads(clean_json)
-            data["_rate_label"] = rate_label
-            return data
+            return json.loads(clean_json)
         except Exception as e:
             logger.error(f"❌ Ошибка коррекции: {e}")
             return {
-                "error_phrase": "",
-                "corrected_phrase": "",
                 "corrected_sentence": text,
-                "explanation": "",
-                "approval_phrase": "",
-                "error_category": "none",
-                "_rate_label": rate_label,
+                "explanation": "Сервис проверки временно недоступен.",
+                "error_category": "none"
             }
-
-    async def log_flow_errors(self, text: str, user_id: int, level: str) -> None:
-        """Fire-and-forget: проверяет ошибки во Flow и тихо пишет в БД. Ничего не возвращает юзеру."""
-        try:
-            from src.services.supabase_db import db
-            result = await self.correct_text(text, level, correction_rate=50)
-            error_cat = result.get("error_category", "none")
-            if error_cat and error_cat.lower() != "none":
-                await db.log_error(user_id, {
-                    "category": error_cat,
-                    "original_text": text,
-                    "corrected_text": result.get("corrected_sentence", ""),
-                    "source": "flow",
-                })
-        except Exception as e:
-            logger.error(f"❌ log_flow_errors: {e}")
 
     # ─── Генерация ответа (обычный режим) ──────────────────────────────────
 
@@ -764,23 +742,6 @@ User Level: {level}"""
             logger.error(f"❌ Ошибка генерации уведомления: {e}")
             return "Hey, it's been a while. Come back and let's talk!"
 
-    async def generate_simple_text(self, prompt: str, max_tokens: int = 400) -> str:
-        """Универсальный генератор текста по произвольному промпту. Используется для Deep Dive отчётов."""
-        async def _gen(client):
-            response = await client.chat.completions.create(
-                model="meta-llama/llama-4-scout-17b-16e-instruct",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.7,
-                max_tokens=max_tokens
-            )
-            return response.choices[0].message.content.strip()
-
-        try:
-            return await self._make_request(_gen)
-        except Exception as e:
-            logger.error(f"❌ generate_simple_text error: {e}")
-            return ""
-
     # ─── Перевод ───────────────────────────────────────────────────────────
 
     async def generate_stats_deep_dive(self, stats: dict) -> str:
@@ -1049,10 +1010,9 @@ User stats:
         summary: Optional[str] = None,
         topics: Optional[str] = None,
         practice_error: Optional[Dict[str, Any]] = None,
-        correction_rate: int = 50,
     ) -> Tuple[str, Dict[str, Any]]:
         try:
-            correction_task = self.correct_text(user_text, user_level, correction_rate=correction_rate)
+            correction_task = self.correct_text(user_text, user_level)
             response_task = self.generate_tutor_response(
                 user_text, user_level,
                 history=history, summary=summary, topics=topics,
