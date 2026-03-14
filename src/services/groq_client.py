@@ -545,48 +545,49 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         errors: list
     ) -> str:
         """
-        Воскресный Deep Dive — отчёт от Mrs. Smith с анализом ошибок за неделю.
-        Отличается от stats deep dive тем, что оперирует конкретными примерами ошибок.
+        Воскресный Deep Dive — личный разбор от Mrs. Smith.
+        Педагогический анализ паттернов без цитат речи юзера.
         """
         from src.personas import get_persona_tutor_prompt as _get_tutor_prompt
         mrs_smith_prompt = _get_tutor_prompt("mrs_smith")
 
-        user = stats.get("user", {})
         msgs_this_week = stats.get("msgs_this_week", 0)
+        streak = stats.get("streak_days", 0)
 
-        errors_block_lines = []
-        for e in errors[:3]:
-            cat = e.get("category", "")
-            examples = e.get("examples", [])
-            example = examples[0] if examples else ""
-            if example:
-                errors_block_lines.append(
-                    f"Pattern: {cat}\n"
-                    f"Student said: \"{example}\""
-                )
+        # Только категории — без примеров речи юзера
+        if errors:
+            patterns = ", ".join(
+                e.get("category", "").strip()
+                for e in errors[:5]
+                if e.get("category")
+            )
+        else:
+            patterns = None
 
-        errors_block = (
-            "\n\n".join(errors_block_lines)
-            if errors_block_lines
-            else "No recurring errors this week — a genuinely strong week."
+        patterns_block = (
+            f"Patterns noticed this week: {patterns}"
+            if patterns
+            else "No recurring patterns this week — conversations flowed well."
         )
 
         system = (
             f"{mrs_smith_prompt}\n\n"
-            "# SUNDAY DEEP DIVE\n"
-            "You are writing a weekly personal report directly to your student.\n"
-            "You have been quietly reviewing their conversations this week.\n\n"
-            f"Student activity this week: {msgs_this_week} messages sent.\n\n"
-            f"Language patterns noticed:\n{errors_block}\n\n"
-            "# YOUR INSTRUCTIONS\n"
-            "1. Open warmly — acknowledge their effort with the specific message count.\n"
-            "2. For each language pattern: show their example (❌), then the correct version (✅), "
-            "then explain the rule in ONE friendly sentence in Russian.\n"
-            "3. End with a short personal encouraging note.\n"
-            "4. Use emojis naturally for readability.\n"
-            "5. CRITICAL: Do NOT use ### or ## or any markdown headers. "
-            "Separate sections with a blank line and an emoji if needed — nothing else.\n"
-            "6. Do NOT sound like a school report card. Sound like a teacher who knows this student."
+            "# TASK: SUNDAY DEEP DIVE\n"
+            "Write a personal weekly note to your student. "
+            "You have been quietly observing their English this week.\n\n"
+            f"Facts: {msgs_this_week} messages this week. Streak: {streak} days.\n"
+            f"{patterns_block}\n\n"
+            "# WRITING RULES\n"
+            "— Warm and personal, like a letter, not a report card.\n"
+            "— Mention the message count naturally in the opening.\n"
+            "— For each language pattern: explain what it is, why it trips people up, "
+            "and give ONE clear correct example you compose yourself (not quoted from the student). "
+            "Explain the rule in Russian (one sentence). Keep it light.\n"
+            "— If no patterns: say something genuine about consistency or progress.\n"
+            "— Close with a short personal note — something a real teacher would say.\n"
+            "— NO markdown headers (no ###, no **). Use emojis to break sections if needed.\n"
+            "— Max 300 words. Every sentence must earn its place.\n"
+            "— Output plain text only. No HTML tags."
         )
 
         async def _sunday(client):
@@ -594,12 +595,17 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 model="meta-llama/llama-4-scout-17b-16e-instruct",
                 messages=[
                     {"role": "system", "content": system},
-                    {"role": "user", "content": "[write the Sunday Deep Dive report]"}
+                    {"role": "user", "content": "[write the deep dive]"}
                 ],
-                temperature=0.75,
-                max_tokens=450
+                temperature=0.8,
+                max_tokens=500
             )
-            return response.choices[0].message.content.strip()
+            raw = response.choices[0].message.content.strip()
+            # Страховка: убираем markdown если LLM всё равно добавил
+            raw = re.sub(r'^#{1,3}\s*', '', raw, flags=re.MULTILINE)
+            raw = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', raw)
+            raw = re.sub(r'\*(.+?)\*', r'<i>\1</i>', raw)
+            return raw.strip()
 
         try:
             return await self._make_request(_sunday)
