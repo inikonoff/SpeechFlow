@@ -24,6 +24,7 @@ from src.bot.keyboards import (
     get_admin_users_keyboard,
     get_admin_user_card_keyboard,
     get_stats_back_keyboard,
+    get_vocabulary_actions_keyboard,
 )
 from src.personas import get_all_personas
 from src.services.supabase_db import db
@@ -752,3 +753,79 @@ async def howto_original(callback: CallbackQuery):
     except Exception as e:
         logger.error(f"Error restoring how to use: {e}")
         await callback.answer("Could not restore original.", show_alert=True)
+
+# ─── Vocabulary ──────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "my_vocabulary")
+async def cq_my_vocabulary(callback: CallbackQuery):
+    try:
+        user_id = callback.from_user.id
+        words = await db.get_user_vocabulary(user_id, tab="active", limit=20)
+        if not words:
+            text = (
+                "📚 <b>My Vocabulary</b>\n\n"
+                "You haven't saved any words yet.\n"
+                "Just keep talking — I'll collect useful words and phrases for you."
+            )
+        else:
+            lines = [f"📚 <b>My Vocabulary</b> — {len(words)} words\n"]
+            for w in words:
+                word = html.escape(w.get("word_or_phrase", ""))
+                translation = html.escape(w.get("translation", ""))
+                ctx = html.escape(w.get("context_sentence", ""))
+                entry = f"• <b>{word}</b>"
+                if translation:
+                    entry += f" — {translation}"
+                if ctx:
+                    entry += f"\n  <i>{ctx}</i>"
+                lines.append(entry)
+            text = "\n".join(lines)
+        await safe_edit_text(
+            callback.message, text,
+            parse_mode="HTML",
+            reply_markup=get_vocabulary_actions_keyboard()
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in my_vocabulary: {e}")
+        await callback.answer("Error loading vocabulary.", show_alert=True)
+
+
+@router.callback_query(F.data == "vocab_clear")
+async def cq_vocab_clear(callback: CallbackQuery):
+    try:
+        await db.clear_vocabulary(callback.from_user.id)
+        await safe_edit_text(
+            callback.message,
+            "🗑 <b>Vocabulary cleared.</b>\n\nStart a new conversation to fill it back up.",
+            parse_mode="HTML",
+            reply_markup=get_vocabulary_actions_keyboard()
+        )
+        await callback.answer("Cleared.")
+    except Exception as e:
+        logger.error(f"Error clearing vocabulary: {e}")
+        await callback.answer("Error.", show_alert=True)
+
+
+@router.callback_query(F.data == "vocab_export")
+async def cq_vocab_export(callback: CallbackQuery):
+    try:
+        user_id = callback.from_user.id
+        words = await db.get_user_vocabulary(user_id, tab="active", limit=200)
+        if not words:
+            await callback.answer("Nothing to export yet.", show_alert=True)
+            return
+        lines = ["word_or_phrase\ttranslation\tcontext_sentence"]
+        for w in words:
+            word = w.get("word_or_phrase", "")
+            translation = w.get("translation", "")
+            ctx = w.get("context_sentence", "")
+            lines.append(f"{word}\t{translation}\t{ctx}")
+        text = "\n".join(lines)
+        from aiogram.types import BufferedInputFile
+        file = BufferedInputFile(text.encode("utf-8"), filename="vocabulary.txt")
+        await callback.message.answer_document(file, caption="📥 Your vocabulary export")
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error exporting vocabulary: {e}")
+        await callback.answer("Export failed.", show_alert=True)
