@@ -40,12 +40,19 @@ BUTTON_TEXTS = {
     "⏹ Stop Flow", "⏹ Stop Tutor", "⏹ Stop PenFriend", "↩ Switch"
 }
 
-def _cache_original(msg_id: int, text: str):
+_persona_display_cache: Dict[int, str] = {}
+
+def _cache_persona_display(msg_id: int, persona_display: str):
+    if len(_persona_display_cache) > 5000:
+        _persona_display_cache.clear()
+    _persona_display_cache[msg_id] = persona_display
     if len(_originals_cache) > 5000:
         _originals_cache.clear()
     _originals_cache[msg_id] = text
 
-def _penfriend_typing_delay(text: str) -> float:
+def _md_bold_to_html(text: str) -> str:
+    """Конвертирует **bold** markdown в <b>bold</b> HTML для Telegram."""
+    return re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
     words = len(text.split())
     seconds = (words / 55) * 60 * 0.7
     return max(1.4, min(seconds, 6.3))
@@ -279,6 +286,7 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
                     reply_markup=get_flow_voice_keyboard(0)
                 )
                 _cache_original(sent.message_id, greeting)
+                _cache_persona_display(sent.message_id, persona_display)
                 await safe_edit_reply_markup(sent, reply_markup=get_flow_voice_keyboard(sent.message_id))
         else:
             safe_greeting = html.escape(greeting)
@@ -389,7 +397,8 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             await message.bot.send_chat_action(user_id, "typing")
             await asyncio.sleep(delay)
             safe_response = html.escape(chat_response)
-            sent = await message.answer(f"💬 {safe_response}", parse_mode="HTML")
+            display_response = _md_bold_to_html(safe_response)
+            sent = await message.answer(f"💬 {display_response}", parse_mode="HTML")
             _cache_original(sent.message_id, chat_response)
             await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
         else:
@@ -402,6 +411,7 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
                     reply_markup=get_flow_voice_keyboard(0)
                 )
                 _cache_original(sent.message_id, chat_response)
+                _cache_persona_display(sent.message_id, persona_display)
                 await safe_edit_reply_markup(sent, reply_markup=get_flow_voice_keyboard(sent.message_id))
 
         if is_farewell:
@@ -682,7 +692,7 @@ async def flow_original(callback: CallbackQuery):
         if not original:
             await callback.answer("Text not available.", show_alert=True)
             return
-        persona_display = callback.message.caption.split("\n")[0] if callback.message.caption else ""
+        persona_display = _persona_display_cache.get(message_id, "")
         await safe_edit_caption(
             callback.message,
             caption=persona_display,
