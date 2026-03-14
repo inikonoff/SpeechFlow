@@ -738,6 +738,8 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                         "role": "system",
                         "content": (
                             "You are a translator. Translate the given English text to Russian. "
+                            "If the text contains words wrapped in **double asterisks**, "
+                            "keep the **double asterisks** around the translated equivalent. "
                             "Return only the translation, no comments or explanations."
                         )
                     },
