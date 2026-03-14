@@ -590,9 +590,8 @@ async def handle_translate(callback: CallbackQuery):
             raw = callback.message.text or ""
             original_text = raw.removeprefix("💬 ").strip()
 
-        clean_for_translation = re.sub(r'\*\*(.+?)\*\*', r'\1', original_text, flags=re.DOTALL)
-        translation = await groq_client.translate_text(clean_for_translation)
-        safe_translation = html.escape(translation)
+        translation = await groq_client.translate_text(original_text)
+        safe_translation = _md_bold_to_html(html.escape(translation))
 
         from aiogram.utils.keyboard import InlineKeyboardBuilder
         from aiogram.types import InlineKeyboardButton
