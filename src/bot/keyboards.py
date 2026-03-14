@@ -31,11 +31,8 @@ def get_persona_keyboard() -> InlineKeyboardMarkup:
 def get_main_menu_keyboard(user_id: int = 0) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="📖 How to use", callback_data="how_to_use"))
-    builder.row(
-        InlineKeyboardButton(text="📊 My Stats",      callback_data="my_stats"),
-        InlineKeyboardButton(text="📚 My Vocabulary", callback_data="my_vocabulary"),
-    )
-    builder.row(InlineKeyboardButton(text="⚙️ Settings", callback_data="settings"))
+    builder.row(InlineKeyboardButton(text="📊 My Stats",   callback_data="my_stats"))
+    builder.row(InlineKeyboardButton(text="⚙️ Settings",   callback_data="settings"))
     if user_id in ADMIN_IDS:
         builder.row(InlineKeyboardButton(text="🔧 Админ-панель", callback_data="admin_panel"))
     return builder.as_markup()
@@ -86,14 +83,13 @@ def get_admin_user_card_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="← К списку", callback_data="admin_users"))
     return builder.as_markup()
 
-def get_settings_keyboard(notifications_enabled: bool, user_id: int = 0, practice_mode: bool = False) -> InlineKeyboardMarkup:
+def get_settings_keyboard(notifications_enabled: bool, user_id: int = 0) -> InlineKeyboardMarkup:
     notif_text = "🔔 Notifications: ON" if notifications_enabled else "🔕 Notifications: OFF"
-    practice_text = "📚 Vocab Practice: ON" if practice_mode else "📚 Vocab Practice: OFF"
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text=notif_text,                  callback_data="toggle_notifications"))
     builder.row(InlineKeyboardButton(text="📊 Change Level",           callback_data="change_level"))
     builder.row(InlineKeyboardButton(text="✏️ Correction Sensitivity", callback_data="correction_rate"))
-    builder.row(InlineKeyboardButton(text=practice_text,               callback_data="toggle_vocab_practice"))
+    builder.row(InlineKeyboardButton(text="📋 Mistakes Practice",      callback_data="my_practice_log"))
     if user_id in ADMIN_IDS:
         builder.row(InlineKeyboardButton(text="🔧 Админ-панель",       callback_data="admin_panel"))
     builder.row(InlineKeyboardButton(text="← Back",                    callback_data="back_to_menu"))
@@ -126,15 +122,6 @@ def get_back_to_settings_keyboard() -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="← Back to Settings", callback_data="settings"))
     return builder.as_markup()
 
-
-def get_vocabulary_actions_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text="🗑 Clear All", callback_data="vocab_clear"),
-        InlineKeyboardButton(text="📥 Export",    callback_data="vocab_export"),
-    )
-    builder.row(InlineKeyboardButton(text="← Back", callback_data="back_to_menu"))
-    return builder.as_markup()
 
 
 def get_translate_keyboard(message_id: int) -> InlineKeyboardMarkup:
