@@ -11,5 +11,9 @@ class FlowState(StatesGroup):
     active = State()
 
 
+class TutorState(StatesGroup):
+    awaiting_drill = State()
+
+
 class AdminState(StatesGroup):
     waiting_broadcast = State()
