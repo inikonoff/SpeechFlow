@@ -356,12 +356,12 @@ class SupabaseDB:
                          .lt("created_at", start_of_week)
                          .execute())
 
-            errors_this = (self.client.table("error_logs")
+            errors_this = (self.client.table("errors")
                            .select("category")
                            .eq("user_id", telegram_id)
                            .gte("created_at", start_of_week)
                            .execute())
-            errors_prev = (self.client.table("error_logs")
+            errors_prev = (self.client.table("errors")
                            .select("category")
                            .eq("user_id", telegram_id)
                            .gte("created_at", prev_week_start)
@@ -404,7 +404,7 @@ class SupabaseDB:
             if not category or category.lower() == "none":
                 return False
 
-            self.client.table("error_logs").insert({
+            self.client.table("errors").insert({
                 "user_id": user_id,
                 "category": category,
                 "mistake_text": error_data.get("mistake_text", ""),
@@ -426,7 +426,7 @@ class SupabaseDB:
             if not category or category.lower() == "none":
                 return False
 
-            self.client.table("error_logs").insert({
+            self.client.table("errors").insert({
                 "user_id": user_id,
                 "category": category,
                 "mistake_text": error_data.get("mistake_text", ""),
@@ -441,7 +441,7 @@ class SupabaseDB:
     async def get_top_error_categories(self, user_id: int, limit: int = 2) -> List[str]:
         """Топ категорий ошибок для подсказки модели в Flow Mode."""
         try:
-            response = (self.client.table("error_logs")
+            response = (self.client.table("errors")
                         .select("category")
                         .eq("user_id", user_id)
                         .execute())
@@ -465,7 +465,7 @@ class SupabaseDB:
         """
         try:
             cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
-            response = (self.client.table("error_logs")
+            response = (self.client.table("errors")
                         .select("category, mistake_text, corrected_text")
                         .eq("user_id", user_id)
                         .gte("created_at", cutoff)
