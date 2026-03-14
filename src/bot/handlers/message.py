@@ -521,14 +521,18 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
             safe_corrected = html.escape(raw_corrected)
             safe_explanation = html.escape(raw_explanation) if raw_explanation else ""
 
-            card_lines = [
+            spoiler_lines = [
                 f"❌ {safe_original}",
                 f"✅ {safe_corrected}",
             ]
             if safe_explanation:
-                card_lines.append(f"💡 {safe_explanation}")
+                spoiler_lines.append(f"💡 {safe_explanation}")
 
-            await message.answer("\n".join(card_lines), parse_mode="HTML")
+            spoiler_content = "\n".join(spoiler_lines)
+            await message.answer(
+                f"<tg-spoiler>{spoiler_content}</tg-spoiler>",
+                parse_mode="HTML"
+            )
 
             # Тихо логируем в БД для статистики
             asyncio.create_task(db.log_tutor_error(user_id, {
@@ -621,7 +625,7 @@ async def handle_original(callback: CallbackQuery):
             await callback.answer("Original text not available.", show_alert=True)
             return
 
-        safe_original = html.escape(original_text)
+        safe_original = _md_bold_to_html(html.escape(original_text))
 
         from aiogram.utils.keyboard import InlineKeyboardBuilder
         from aiogram.types import InlineKeyboardButton
