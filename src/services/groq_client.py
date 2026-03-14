@@ -19,14 +19,17 @@ This instruction overrides any general rule about not correcting grammar.
 In this conversation, recasting IS your job — do it silently and naturally.
 
 If the user makes a grammatical error:
-1. Use the corrected version of their phrase naturally in YOUR OWN response.
-2. Wrap ONLY the corrected words in **bold markdown** (**like this**).
-3. Choose ONLY ONE error per message — the most important one. Ignore the rest entirely.
+1. Identify the ONE most serious error. Priority: missing verb ("I glad") > wrong verb form > wrong preposition > minor issues.
+2. Use the corrected version of their phrase naturally in YOUR OWN response.
+3. Wrap ONLY the corrected words in **bold markdown** (**like this**).
 4. NEVER say "you made a mistake", "that's wrong", or anything that sounds like correction.
 5. Weave it in so naturally that it feels like your own speech, not a lesson.
 6. If there are no errors — respond normally, no bold needed.
 
-Example:
+Examples:
+  User: "I glad to a message from you."
+  You: "I **am glad to hear from** you too! What have you been up to?"
+
   User: "I looking forward to see you tomorrow!"
   You: "Oh I **am looking forward to seeing** you too! Should we grab coffee before we go?"
 """
@@ -36,6 +39,7 @@ class GroqClient:
     def __init__(self, api_keys: List[str]):
         self.clients = []
         self.current_index = 0
+        self._lock = asyncio.Lock()
 
         for key in api_keys:
             if key.strip():
@@ -48,12 +52,13 @@ class GroqClient:
                 )
         logger.info(f"✅ Инициализировано {len(self.clients)} Groq клиентов")
 
-    def _get_next_client(self) -> Optional[AsyncOpenAI]:
+    async def _get_next_client(self) -> Optional[AsyncOpenAI]:
         if not self.clients:
             return None
-        client = self.clients[self.current_index]
-        self.current_index = (self.current_index + 1) % len(self.clients)
-        return client
+        async with self._lock:
+            client = self.clients[self.current_index]
+            self.current_index = (self.current_index + 1) % len(self.clients)
+            return client
 
     async def _make_request(self, func, *args, **kwargs):
         if not self.clients:
@@ -61,7 +66,7 @@ class GroqClient:
 
         errors = []
         for attempt in range(len(self.clients) * 2):
-            client = self._get_next_client()
+            client = await self._get_next_client()
             if not client:
                 break
             try:
@@ -602,17 +607,81 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         from src.personas import get_persona_prompt
         persona_prompt = get_persona_prompt(persona_key)
 
+        topic_pools = {
+            "greg": [
+                "You just finished a long shift and grabbed food on the way home.",
+                "You're watching a Celtics game and it's going badly.",
+                "You tried a new recipe from Mark and it actually worked.",
+                "You had a weird case today you can't stop thinking about.",
+                "You're procrastinating on studying and your phone is right there.",
+            ],
+            "mark": [
+                "You just closed the kitchen after a rough service.",
+                "You got a new seasonal ingredient and you're already planning something.",
+                "You had a customer tonight who actually knew what they were eating.",
+                "You've been thinking about a dish you want to put on the menu.",
+                "Summer called earlier and it got you in a good mood.",
+            ],
+            "junior": [
+                "Leo just said something hilarious at dinner.",
+                "You've been debugging the same thing for two hours and need a break.",
+                "Pixel knocked your coffee off the desk and you're not even mad.",
+                "You just read something about AI that genuinely surprised you.",
+                "Jane made you step away from the computer and you actually feel better.",
+            ],
+            "mrs_smith": [
+                "You just finished grading and made yourself a cup of tea.",
+                "You walked home through the park and it was unusually quiet.",
+                "One of your students said something today that stuck with you.",
+                "You've been reading something good and wanted someone to talk to about it.",
+                "Your garden has something new coming up and you noticed it this morning.",
+            ],
+            "summer": [
+                "You just landed somewhere new and the light here is incredible.",
+                "You found a tiny café nobody knows about and you're sitting in it right now.",
+                "You had a conversation with a stranger today that changed your afternoon.",
+                "You're packing for the next trip and can't decide what to leave behind.",
+                "You called Mark earlier and now you're missing home a little.",
+            ],
+            "jane": [
+                "Both boys are finally asleep and you have five minutes to yourself.",
+                "You saw something at the grocery store that made you think of a campaign idea.",
+                "Junior said something ridiculous today and you're still laughing about it.",
+                "You've been half-planning something and wanted to think it through out loud.",
+                "You made a really good coffee this morning and the house was quiet for once.",
+            ],
+        }
+
+        topics = topic_pools.get(persona_key, topic_pools["greg"])
+        topic = random.choice(topics)
+
         user = stats.get("user", {})
-        streak = user.get("streak_days", 0)
+        streak = stats.get("user", {}).get("streak_days", 0)
+        msgs_this_week = stats.get("msgs_this_week", 0)
+
+        stat_hints = []
+        if streak > 0:
+            stat_hints.append(f"they have a {streak} day streak going")
+        if msgs_this_week > 0:
+            stat_hints.append(f"they sent {msgs_this_week} messages this week")
+
+        stat_line = ""
+        if stat_hints:
+            chosen_stat = random.choice(stat_hints)
+            stat_line = (
+                f"\nOptionally, if it fits naturally, you can mention that {chosen_stat}. "
+                f"Only use it if it flows — don't force it."
+            )
 
         system = (
             f"{persona_prompt}\n\n"
-            f"# YOUR TASK\n"
-            f"The user hasn't opened the app in a while. Send them a short, personal message "
-            f"in your own voice — like a friend checking in, not a system notification.\n"
-            f"They currently have a {streak} day streak. Mention it casually if it feels natural.\n"
-            f"Keep it warm, brief (2-3 sentences max), and end with a natural invitation to come back and talk.\n"
-            f"Don't be pushy. Don't say 'I missed you' if it feels forced."
+            f"# SITUATION\n"
+            f"{topic}\n\n"
+            f"Write a short natural message to the user checking in — 1 to 3 sentences. "
+            f"Speak as yourself in this moment. Don't be a coach or tutor. "
+            f"Don't use emojis. Don't sound like a notification. "
+            f"Just a real person reaching out."
+            f"{stat_line}"
         )
 
         async def _notify(client):
@@ -620,10 +689,10 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 model="meta-llama/llama-4-scout-17b-16e-instruct",
                 messages=[
                     {"role": "system", "content": system},
-                    {"role": "user", "content": "[write the re-engagement message]"}
+                    {"role": "user", "content": "[write the message]"}
                 ],
-                temperature=0.85,
-                max_tokens=150
+                temperature=0.9,
+                max_tokens=120
             )
             return response.choices[0].message.content.strip()
 
