@@ -354,7 +354,10 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
         await message.bot.send_chat_action(user_id, "record_voice")
 
         if active_mode == MODE_PENFRIEND:
-            recasting_enabled = user.get("recasting_enabled", False)
+            # Читаем юзера заново — значение из middleware может быть устаревшим
+            # если тоггл был нажат в этой же сессии
+            fresh_user = await db.get_or_create_user(user_id)
+            recasting_enabled = fresh_user.get("recasting_enabled", False)
             chat_response = await groq_client.generate_penfriend_response(
                 text=user_text,
                 persona_key=persona_key,
