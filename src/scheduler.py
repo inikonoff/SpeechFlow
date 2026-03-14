@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime, timezone
 from aiogram import Bot
 from aiogram.types import BufferedInputFile
 
@@ -9,44 +10,80 @@ from src.personas import get_persona_voice, get_persona_display
 
 logger = logging.getLogger(__name__)
 
-# Интервал проверки — каждый час
-CHECK_INTERVAL_SECONDS = 3600
+CHECK_INTERVAL_SECONDS = 3600  # проверка каждый час
+
+
+async def send_sunday_deep_dive(bot: Bot) -> None:
+    """
+    Воскресный Deep Dive от Mrs. Smith.
+    Отправляется всем пользователям с включёнными уведомлениями
+    каждое воскресенье между 9:00 и 10:00 UTC.
+    Содержит анализ ошибок за неделю с реальными примерами.
+    """
+    try:
+        users = await db.get_users_for_sunday_report()
+        if not users:
+            return
+
+        logger.info(f"📊 Sending Sunday Deep Dive to {len(users)} users")
+
+        for user in users:
+            try:
+                telegram_id = user.get("telegram_id")
+
+                stats = await db.get_user_stats(telegram_id)
+                errors = await db.get_weekly_errors_for_report(telegram_id)
+
+                report_text = await groq_client.generate_sunday_deep_dive(
+                    stats=stats,
+                    errors=errors
+                )
+
+                await bot.send_message(
+                    chat_id=telegram_id,
+                    text=f"📚 <b>Your Weekly Deep Dive</b>\n\n{report_text}",
+                    parse_mode="HTML"
+                )
+
+                logger.info(f"✅ Sunday Deep Dive sent to user {telegram_id}")
+                await asyncio.sleep(0.5)
+
+            except Exception as e:
+                logger.error(f"❌ Failed to send Deep Dive to {user.get('telegram_id')}: {e}")
+
+    except Exception as e:
+        logger.error(f"❌ Error in sunday deep dive: {e}")
 
 
 async def send_re_engagement_notifications(bot: Bot) -> None:
     """
-    Проверяет пользователей которые не заходили 48+ часов
-    и отправляет им персональное голосовое уведомление от лица их персонажа.
+    Персональное голосовое уведомление от персонажа юзера
+    для тех, кто не заходил 23.5+ часов.
     """
     try:
         users = await db.get_users_for_notification()
         if not users:
             return
 
-        logger.info(f"📬 Sending voice re-engagement notifications to {len(users)} users")
+        logger.info(f"📬 Sending re-engagement notifications to {len(users)} users")
 
         for user in users:
             try:
                 telegram_id = user.get("telegram_id")
                 persona_key = user.get("persona", "greg")
-                
-                # Получаем голос и красивое имя персонажа (например: 👨‍🍳 Mark)
                 voice = get_persona_voice(persona_key)
                 persona_display = get_persona_display(persona_key)
 
                 stats = await db.get_user_stats(telegram_id)
-                
-                # Генерируем уникальный текст
+
                 message_text = await groq_client.generate_re_engagement_notification(
                     persona_key=persona_key,
                     stats=stats
                 )
 
-                # Пробуем сгенерировать голосовое сообщение
                 voice_bytes = await groq_client.text_to_speech(message_text, voice=voice)
 
                 if voice_bytes:
-                    # Отправляем аудио с короткой подписью
                     voice_file = BufferedInputFile(voice_bytes, filename="re_engagement.wav")
                     await bot.send_voice(
                         chat_id=telegram_id,
@@ -54,39 +91,45 @@ async def send_re_engagement_notifications(bot: Bot) -> None:
                         caption=f"🎙 {persona_display}"
                     )
                 else:
-                    # Fallback: если TTS недоступен или упал с ошибкой, отправляем текст
                     await bot.send_message(
                         chat_id=telegram_id,
                         text=f"💬 <b>{persona_display}</b>\n\n{message_text}",
                         parse_mode="HTML"
                     )
-                
-                # Отмечаем пользователя как уведомленного, чтобы не спамить его каждый час
-                await db.mark_user_notified(telegram_id)
-                logger.info(f"✅ Notification sent to user {telegram_id}")
 
-                # Пауза между отправками увеличена, так как TTS - тяжелый API-запрос
+                await db.mark_user_notified(telegram_id)
+                logger.info(f"✅ Re-engagement sent to user {telegram_id}")
                 await asyncio.sleep(1.5)
 
             except Exception as e:
                 logger.error(f"❌ Failed to notify user {user.get('telegram_id')}: {e}")
 
     except Exception as e:
-        logger.error(f"❌ Error in notification scheduler: {e}")
+        logger.error(f"❌ Error in re-engagement scheduler: {e}")
 
 
 async def run_scheduler(bot: Bot) -> None:
     """
-    Фоновая задача: запускается при старте бота,
-    проверяет пользователей для уведомлений каждый час.
+    Фоновая задача: каждый час проверяет:
+    1. Воскресенье 9–10 UTC → Sunday Deep Dive от Mrs. Smith
+    2. Каждый час → re-engagement для неактивных юзеров
     """
-    logger.info("🕐 Notification scheduler started")
+    logger.info("🕐 Scheduler started")
     while True:
         try:
             await asyncio.sleep(CHECK_INTERVAL_SECONDS)
+
+            now = datetime.now(timezone.utc)
+
+            # Sunday Deep Dive: воскресенье (weekday=6), 9:00–10:00 UTC
+            if now.weekday() == 6 and now.hour == 9:
+                await send_sunday_deep_dive(bot)
+
+            # Re-engagement: каждый час
             await send_re_engagement_notifications(bot)
+
         except asyncio.CancelledError:
-            logger.info("🛑 Notification scheduler stopped")
+            logger.info("🛑 Scheduler stopped")
             break
         except Exception as e:
             logger.error(f"❌ Scheduler error: {e}")
