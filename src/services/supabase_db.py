@@ -438,6 +438,26 @@ class SupabaseDB:
             logger.error(f"Error logging tutor error: {e}")
             return False
 
+    async def get_top_error_categories(self, user_id: int, limit: int = 2) -> List[str]:
+        """Топ категорий ошибок для подсказки модели в Flow Mode."""
+        try:
+            response = (self.client.table("error_logs")
+                        .select("category")
+                        .eq("user_id", user_id)
+                        .execute())
+            if not response.data:
+                return []
+            counts = {}
+            for row in response.data:
+                c = row.get("category")
+                if c and c.lower() != "none":
+                    counts[c] = counts.get(c, 0) + 1
+            sorted_cats = sorted(counts.items(), key=lambda x: x[1], reverse=True)
+            return [cat[0] for cat in sorted_cats[:limit]]
+        except Exception as e:
+            logger.error(f"Error getting top errors: {e}")
+            return []
+
     async def get_weekly_errors_for_report(self, user_id: int) -> List[Dict[str, Any]]:
         """
         Все ошибки за последние 7 дней (Flow + Tutor), сгруппированные по категории.
