@@ -75,10 +75,11 @@ async def cmd_settings(message: Message):
     user = await db.get_or_create_user(message.from_user.id)
     notif = user.get("notifications_enabled", True)
     recasting = user.get("recasting_enabled", False)
+    practice = user.get("mistakes_practice_enabled", False)
     await message.answer(
         "⚙️ <b>Settings</b>",
         parse_mode="HTML",
-        reply_markup=get_settings_keyboard(notif, recasting, message.from_user.id)
+        reply_markup=get_settings_keyboard(notif, recasting, practice, message.from_user.id)
     )
 
 @router.message(Command("author"))
@@ -146,6 +147,13 @@ def _build_quick_stats(stats: dict) -> str:
     else:
         text += "No errors logged yet — keep practicing!"
 
+    # Блок Mistakes Practice
+    active = stats.get("active_errors_count", 0)
+    mastered = stats.get("mastered_errors_count", 0)
+    if active or mastered:
+        text += f"\n\n📋 <b>Mistakes Practice</b>\n"
+        text += f"• Active: <b>{active}</b>  ✅ Mastered: <b>{mastered}</b>"
+
     return text
 
 def get_stats_keyboard(message_id: int, mode: str = "quick") -> InlineKeyboardMarkup:
@@ -154,6 +162,7 @@ def get_stats_keyboard(message_id: int, mode: str = "quick") -> InlineKeyboardMa
         builder.row(InlineKeyboardButton(text="📖 Deep Dive", callback_data=f"stats_deep_{message_id}"))
     else:
         builder.row(InlineKeyboardButton(text="📊 Quick Stats", callback_data=f"stats_quick_{message_id}"))
+    builder.row(InlineKeyboardButton(text="📋 My Mistakes", callback_data="my_practice_log"))
     builder.row(InlineKeyboardButton(text="🌐 Translate", callback_data=f"stats_translate_{message_id}_{mode}"))
     return builder.as_markup()
 
@@ -202,11 +211,12 @@ async def show_settings(callback: CallbackQuery):
         user = await db.get_or_create_user(callback.from_user.id)
         notif = user.get("notifications_enabled", True)
         recasting = user.get("recasting_enabled", False)
+        practice = user.get("mistakes_practice_enabled", False)
         await safe_edit_text(
             callback.message,
             "⚙️ <b>Settings</b>",
             parse_mode="HTML",
-            reply_markup=get_settings_keyboard(notif, recasting, callback.from_user.id)
+            reply_markup=get_settings_keyboard(notif, recasting, practice, callback.from_user.id)
         )
         await callback.answer()
     except Exception as e:
@@ -224,9 +234,10 @@ async def toggle_notifications(callback: CallbackQuery):
         await callback.answer(f"Notifications {status}", show_alert=False)
 
         recasting = user.get("recasting_enabled", False)
+        practice = user.get("mistakes_practice_enabled", False)
         await safe_edit_reply_markup(
             callback.message,
-            reply_markup=get_settings_keyboard(new_value, recasting, callback.from_user.id)
+            reply_markup=get_settings_keyboard(new_value, recasting, practice, callback.from_user.id)
         )
     except Exception as e:
         logger.error(f"Error toggling notifications: {e}")
@@ -241,12 +252,30 @@ async def cq_toggle_recasting(callback: CallbackQuery):
 
         user = await db.get_or_create_user(callback.from_user.id)
         notif = user.get("notifications_enabled", True)
+        practice = user.get("mistakes_practice_enabled", False)
         await safe_edit_reply_markup(
             callback.message,
-            reply_markup=get_settings_keyboard(notif, new_val, callback.from_user.id)
+            reply_markup=get_settings_keyboard(notif, new_val, practice, callback.from_user.id)
         )
     except Exception as e:
         logger.error(f"Error toggling recasting: {e}")
+        await callback.answer("Error.", show_alert=True)
+
+@router.callback_query(F.data == "toggle_mistakes_practice")
+async def cq_toggle_mistakes_practice(callback: CallbackQuery):
+    try:
+        new_val = await db.toggle_mistakes_practice(callback.from_user.id)
+        status = "ON 🎯" if new_val else "OFF 🎯"
+        await callback.answer(f"Mistakes Practice {status}", show_alert=False)
+        user = await db.get_or_create_user(callback.from_user.id)
+        notif    = user.get("notifications_enabled", True)
+        recasting = user.get("recasting_enabled", False)
+        await safe_edit_reply_markup(
+            callback.message,
+            reply_markup=get_settings_keyboard(notif, recasting, new_val, callback.from_user.id)
+        )
+    except Exception as e:
+        logger.error(f"Error toggling mistakes practice: {e}")
         await callback.answer("Error.", show_alert=True)
 
 @router.callback_query(F.data == "change_level")
@@ -414,11 +443,12 @@ async def back_to_settings(callback: CallbackQuery):
         user = await db.get_or_create_user(callback.from_user.id)
         notif = user.get("notifications_enabled", True)
         recasting = user.get("recasting_enabled", False)
+        practice = user.get("mistakes_practice_enabled", False)
         await safe_edit_text(
             callback.message,
             "⚙️ <b>Settings</b>",
             parse_mode="HTML",
-            reply_markup=get_settings_keyboard(notif, recasting, callback.from_user.id)
+            reply_markup=get_settings_keyboard(notif, recasting, practice, callback.from_user.id)
         )
         await callback.answer()
     except Exception as e:
