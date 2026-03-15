@@ -82,17 +82,19 @@ def get_admin_user_card_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def get_settings_keyboard(notifications_enabled: bool, recasting_enabled: bool, user_id: int = 0) -> InlineKeyboardMarkup:
-    notif_text   = "🔔 Notifications: ON"  if notifications_enabled else "🔕 Notifications: OFF"
-    recast_text  = "📝 Recasting: ON"      if recasting_enabled     else "📝 Recasting: OFF"
+def get_settings_keyboard(notifications_enabled: bool, recasting_enabled: bool, mistakes_practice_enabled: bool = False, user_id: int = 0) -> InlineKeyboardMarkup:
+    notif_text    = "🔔 Notifications: ON"      if notifications_enabled      else "🔕 Notifications: OFF"
+    recast_text   = "📝 Recasting: ON"          if recasting_enabled          else "📝 Recasting: OFF"
+    practice_text = "🎯 Mistakes Practice: ON"  if mistakes_practice_enabled  else "🎯 Mistakes Practice: OFF"
 
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text=notif_text,          callback_data="toggle_notifications"))
-    builder.row(InlineKeyboardButton(text=recast_text,         callback_data="toggle_recasting"))
-    builder.row(InlineKeyboardButton(text="📊 Change Level",   callback_data="change_level"))
+    builder.row(InlineKeyboardButton(text=notif_text,    callback_data="toggle_notifications"))
+    builder.row(InlineKeyboardButton(text=recast_text,   callback_data="toggle_recasting"))
+    builder.row(InlineKeyboardButton(text=practice_text, callback_data="toggle_mistakes_practice"))
+    builder.row(InlineKeyboardButton(text="📊 Change Level", callback_data="change_level"))
     if user_id in ADMIN_IDS:
         builder.row(InlineKeyboardButton(text="🔧 Админ-панель", callback_data="admin_panel"))
-    builder.row(InlineKeyboardButton(text="← Back",            callback_data="back_to_menu"))
+    builder.row(InlineKeyboardButton(text="← Back", callback_data="back_to_menu"))
     return builder.as_markup()
 
 
@@ -190,5 +192,21 @@ def get_flow_user_voice_keyboard(message_id: int) -> InlineKeyboardMarkup:
     builder.row(
         InlineKeyboardButton(text="📝 Text",      callback_data=f"uvoice_text_{message_id}"),
         InlineKeyboardButton(text="🌐 Translate", callback_data=f"uvoice_translate_{message_id}"),
+    )
+    return builder.as_markup()
+
+def get_flow_user_voice_text_keyboard(message_id: int) -> InlineKeyboardMarkup:
+    """После показа текста голосового юзера — только Translate."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🌐 Translate", callback_data=f"uvoice_translate_{message_id}"),
+    )
+    return builder.as_markup()
+
+def get_flow_user_voice_translate_keyboard(message_id: int) -> InlineKeyboardMarkup:
+    """После перевода голосового юзера — кнопка Original."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🔤 Original", callback_data=f"uvoice_original_{message_id}"),
     )
     return builder.as_markup()
