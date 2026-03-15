@@ -49,6 +49,9 @@ class SupabaseDB:
                 "free_messages_used": 0,
                 "notifications_enabled": True,
                 "recasting_enabled": False,
+                "mistakes_practice_enabled": False,
+                "last_notified_at": None,
+                "reengagement_count": 0,
                 "session_count": 0,
                 "last_active": datetime.utcnow().isoformat()
             }
@@ -88,6 +91,13 @@ class SupabaseDB:
         await self.update_user(telegram_id, {"recasting_enabled": new_val})
         return new_val
 
+    async def toggle_mistakes_practice(self, telegram_id: int) -> bool:
+        """Переключатель Mistakes Practice во всех режимах."""
+        user = await self.get_or_create_user(telegram_id)
+        new_val = not user.get("mistakes_practice_enabled", False)
+        await self.update_user(telegram_id, {"mistakes_practice_enabled": new_val})
+        return new_val
+
     async def increment_user_metrics(self, telegram_id: int, tokens_used: int = 0) -> bool:
         try:
             user = await self.get_or_create_user(telegram_id)
@@ -121,20 +131,71 @@ class SupabaseDB:
             return []
 
     async def get_users_for_notification(self) -> List[Dict[str, Any]]:
+        """
+        Возвращает юзеров которым нужно отправить re-engagement.
+        Интервал зависит от reengagement_count:
+          0 → 24ч с last_active
+          1 → 48ч с last_notified_at
+          2 → 72ч с last_notified_at
+          3+ → никогда
+        """
         try:
-            cutoff = (datetime.utcnow() - timedelta(hours=23.5)).isoformat()
             response = (self.client.table("users")
                         .select("*")
                         .eq("notifications_enabled", True)
-                        .lt("last_active", cutoff)
+                        .lt("reengagement_count", 3)
                         .execute())
-            return response.data or []
+            candidates = response.data or []
+            now = datetime.utcnow()
+            result = []
+            for u in candidates:
+                count = u.get("reengagement_count", 0) or 0
+                if count == 0:
+                    # Первое: 24ч с last_active
+                    ref_str = u.get("last_active")
+                    hours_needed = 24
+                else:
+                    # Второе/третье: 48/72ч с last_notified_at
+                    ref_str = u.get("last_notified_at")
+                    hours_needed = 48 if count == 1 else 72
+                if not ref_str:
+                    continue
+                try:
+                    ref_dt = datetime.fromisoformat(ref_str.replace("Z", "+00:00")).replace(tzinfo=None)
+                except Exception:
+                    continue
+                elapsed = (now - ref_dt).total_seconds() / 3600
+                # Также проверяем что юзер не заходил с тех пор
+                last_active_str = u.get("last_active", "")
+                if last_active_str and count > 0:
+                    try:
+                        last_active_dt = datetime.fromisoformat(last_active_str.replace("Z", "+00:00")).replace(tzinfo=None)
+                        if last_active_dt > ref_dt:
+                            # Юзер зашёл после последнего уведомления — сбрасываем
+                            continue
+                    except Exception:
+                        pass
+                if elapsed >= hours_needed:
+                    result.append(u)
+            return result
         except Exception as e:
             logger.error(f"Error getting users for notification: {e}")
             return []
 
     async def mark_user_notified(self, telegram_id: int) -> bool:
-        return await self.update_user(telegram_id, {"last_active": datetime.utcnow().isoformat()})
+        user = await self.get_or_create_user(telegram_id)
+        new_count = (user.get("reengagement_count", 0) or 0) + 1
+        return await self.update_user(telegram_id, {
+            "last_notified_at": datetime.utcnow().isoformat(),
+            "reengagement_count": new_count,
+        })
+
+    async def reset_reengagement(self, telegram_id: int) -> bool:
+        """Сбрасываем счётчик когда юзер вернулся."""
+        return await self.update_user(telegram_id, {
+            "reengagement_count": 0,
+            "last_notified_at": None,
+        })
 
     # ─── Админ-панель ──────────────────────────────────────────────────────
 
@@ -504,5 +565,23 @@ class SupabaseDB:
             logger.error(f"Error getting users for sunday report: {e}")
             return []
 
+
+    async def get_recent_errors(self, user_id: int, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Топ-N самых свежих ошибок юзера (по дате создания).
+        Используется для Mistakes Practice во всех режимах.
+        """
+        try:
+            response = (self.client.table("error_logs")
+                        .select("id, category, mistake_text, corrected_text, mastery_score")
+                        .eq("user_id", user_id)
+                        .neq("category", "none")
+                        .order("created_at", desc=True)
+                        .limit(limit)
+                        .execute())
+            return response.data or []
+        except Exception as e:
+            logger.error(f"Error getting recent errors: {e}")
+            return []
 
 db = SupabaseDB()
