@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timezone
 from aiogram import Bot
 from aiogram.types import BufferedInputFile
+from src.bot.keyboards import get_flow_voice_keyboard
 
 from src.services.supabase_db import db
 from src.services.groq_client import groq_client
@@ -76,19 +77,27 @@ async def send_re_engagement_notifications(bot: Bot) -> None:
 
                 stats = await db.get_user_stats(telegram_id)
 
+                attempt = user.get("reengagement_count", 0) or 0
                 message_text = await groq_client.generate_re_engagement_notification(
                     persona_key=persona_key,
-                    stats=stats
+                    stats=stats,
+                    attempt=attempt,
                 )
 
                 voice_bytes = await groq_client.text_to_speech(message_text, voice=voice)
 
                 if voice_bytes:
                     voice_file = BufferedInputFile(voice_bytes, filename="re_engagement.wav")
-                    await bot.send_voice(
+                    sent = await bot.send_voice(
                         chat_id=telegram_id,
                         voice=voice_file,
-                        caption=f"🎙 {persona_display}"
+                        caption=f"🎙 {persona_display}",
+                        reply_markup=get_flow_voice_keyboard(0)
+                    )
+                    await bot.edit_message_reply_markup(
+                        chat_id=telegram_id,
+                        message_id=sent.message_id,
+                        reply_markup=get_flow_voice_keyboard(sent.message_id)
                     )
                 else:
                     await bot.send_message(
