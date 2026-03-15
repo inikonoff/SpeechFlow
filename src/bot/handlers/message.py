@@ -21,6 +21,8 @@ from src.bot.keyboards import (
     get_flow_voice_text_keyboard,
     get_flow_voice_translate_keyboard,
     get_flow_user_voice_keyboard,
+    get_flow_user_voice_text_keyboard,
+    get_flow_user_voice_translate_keyboard,
     get_persona_keyboard,
     get_mode_keyboard,
     get_penfriend_keyboard,
@@ -245,11 +247,12 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
             user = await db.get_or_create_user(user_id)
             notif = user.get("notifications_enabled", True)
             recasting = user.get("recasting_enabled", False)
+            practice = user.get("mistakes_practice_enabled", False)
             await safe_edit_text(
                 callback.message,
                 f"👤 Now talking to {display_name}.\n\n⚙️ <b>Settings</b>",
                 parse_mode="HTML",
-                reply_markup=get_settings_keyboard(notif, recasting, user_id)
+                reply_markup=get_settings_keyboard(notif, recasting, practice, user_id)
             )
             await callback.answer()
             return
@@ -368,6 +371,10 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
         user_level = user.get("level", settings.DEFAULT_USER_LEVEL)
         await db.save_message(user_id, "user", user_text)
 
+        # Юзер вернулся — сбрасываем счётчик re-engagement фоново
+        if user.get("reengagement_count", 0):
+            asyncio.create_task(db.reset_reengagement(user_id))
+
         farewell_task = asyncio.create_task(groq_client.detect_farewell(user_text))
         history_task = asyncio.create_task(db.get_history(user_id, limit=settings.CONTEXT_WINDOW))
         summary_task = asyncio.create_task(db.get_latest_summary(user_id))
@@ -384,15 +391,28 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             # если тоггл был нажат в этой же сессии
             fresh_user = await db.get_or_create_user(user_id)
             recasting_enabled = fresh_user.get("recasting_enabled", False)
+            pf_practice_error = None
+            if fresh_user.get("mistakes_practice_enabled"):
+                recent = await db.get_recent_errors(user_id, limit=10)
+                if recent:
+                    import random
+                    pf_practice_error = random.choice(recent)
             chat_response = await groq_client.generate_penfriend_response(
                 text=user_text,
                 persona_key=persona_key,
                 history=history,
                 summary=summary,
                 recasting_enabled=recasting_enabled,
+                practice_error=pf_practice_error,
             )
         else:
             # Flow Mode: генерируем ответ и запускаем фоновый анализ ошибок
+            practice_error = None
+            if user.get("mistakes_practice_enabled"):
+                recent = await db.get_recent_errors(user_id, limit=10)
+                if recent:
+                    import random
+                    practice_error = random.choice(recent)
             chat_response = await groq_client.generate_flow_response(
                 text=user_text,
                 persona_key=persona_key,
@@ -400,6 +420,7 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
                 summary=summary,
                 session_count=user.get("session_count", 0),
                 top_errors=top_errors,
+                practice_error=practice_error,
             )
             # Фоновая задача — тихо пишет ошибки в БД, юзер не ждёт
             asyncio.create_task(
@@ -478,7 +499,16 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
                 return
 
             safe_text = html.escape(user_text)
-            await message.answer(f"🎤 <i>You said:</i> {safe_text}", parse_mode="HTML")
+            sent_user = await message.answer(
+                f"🎤 <i>You said:</i> {safe_text}",
+                parse_mode="HTML",
+                reply_markup=get_flow_user_voice_keyboard(0)
+            )
+            _cache_original(sent_user.message_id, user_text)
+            await safe_edit_reply_markup(
+                sent_user,
+                reply_markup=get_flow_user_voice_keyboard(sent_user.message_id)
+            )
 
         elif message.text:
             user_text = message.text.strip()
@@ -493,6 +523,10 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
         user_level = user.get("level", settings.DEFAULT_USER_LEVEL)
         await db.save_message(user_id, "user", user_text)
 
+        # Юзер вернулся — сбрасываем счётчик re-engagement фоново
+        if user.get("reengagement_count", 0):
+            asyncio.create_task(db.reset_reengagement(user_id))
+
         # Параллельно: история + саммари + прощание
         farewell_task = asyncio.create_task(groq_client.detect_farewell(user_text))
         history_task = asyncio.create_task(db.get_history(user_id, limit=settings.CONTEXT_WINDOW))
@@ -506,6 +540,12 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
         await message.bot.send_chat_action(user_id, "typing")
 
         # Два LLM параллельно: ответ + коррекция
+        tutor_practice_error = None
+        if user.get("mistakes_practice_enabled"):
+            recent = await db.get_recent_errors(user_id, limit=10)
+            if recent:
+                import random
+                tutor_practice_error = random.choice(recent)
         chat_response, analysis_data = await groq_client.process_user_message(
             telegram_id=user_id,
             user_text=user_text,
@@ -513,6 +553,8 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
             history=history,
             summary=summary,
             topics=topics,
+            practice_error=tutor_practice_error,
+            message_count=len(history) if history else 0,
         )
 
         await db.save_message(user_id, "assistant", chat_response)
@@ -682,6 +724,26 @@ async def handle_original(callback: CallbackQuery):
         logger.error(f"Error in original callback: {e}")
         await callback.answer("Could not restore original.", show_alert=True)
 
+@router.callback_query(F.data.startswith("uvoice_original_"))
+async def uvoice_original(callback: CallbackQuery):
+    try:
+        message_id = int(callback.data.split("_")[2])
+        user_text = _originals_cache.get(message_id)
+        if not user_text:
+            await callback.answer("Text not available.", show_alert=True)
+            return
+        safe_text = html.escape(user_text)
+        await safe_edit_text(
+            callback.message,
+            f"🎤 <i>{safe_text}</i>",
+            parse_mode="HTML",
+            reply_markup=get_flow_user_voice_text_keyboard(message_id)
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in uvoice_original callback: {e}")
+        await callback.answer("Error.", show_alert=True)
+
 # ─── Flow voice callbacks ──────────────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("flow_text_"))
@@ -758,7 +820,8 @@ async def uvoice_show_text(callback: CallbackQuery):
         await safe_edit_text(
             callback.message,
             f"🎤 <i>{safe_text}</i>",
-            parse_mode="HTML"
+            parse_mode="HTML",
+            reply_markup=get_flow_user_voice_text_keyboard(message_id)
         )
         await callback.answer()
     except Exception as e:
@@ -773,12 +836,18 @@ async def uvoice_translate(callback: CallbackQuery):
         if not user_text:
             await callback.answer("Text not available.", show_alert=True)
             return
-        translation = await groq_client.translate_text(user_text)
-        safe_translation = html.escape(translation)
+        cached = _translation_cache.get(message_id)
+        if cached:
+            safe_translation = cached
+        else:
+            translation = await groq_client.translate_text(user_text)
+            safe_translation = html.escape(translation)
+            _cache_translation(message_id, safe_translation)
         await safe_edit_text(
             callback.message,
             f"🌐 <i>{safe_translation}</i>",
-            parse_mode="HTML"
+            parse_mode="HTML",
+            reply_markup=get_flow_user_voice_translate_keyboard(message_id)
         )
         await callback.answer()
     except Exception as e:
