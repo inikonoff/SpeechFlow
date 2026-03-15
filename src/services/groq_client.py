@@ -17,6 +17,26 @@ RECASTING_BLOCK = """
 # RECASTING — MANDATORY OVERRIDE
 IGNORE any previous instruction about not correcting grammar. In this mode you MUST recast.
 
+MISTAKES_PRACTICE_PASSIVE = (
+    "# MISTAKES PRACTICE (passive)\n"
+    "One of this person's recent errors: {category} — "
+    "they said \"{mistake}\", correct form is \"{corrected}\".\n"
+    "Once during this response, naturally use the correct form in your own speech. "
+    "Do NOT announce it. Do NOT say 'by the way'. Just model it casually. "
+    "If it doesn't fit the conversation — skip it entirely."
+)
+
+MISTAKES_PRACTICE_ACTIVE = (
+    "# MISTAKES PRACTICE (active — Tutor only)\n"
+    "One of this student's recent errors: {category} — "
+    "they said \"{mistake}\", correct form is \"{corrected}\".\n"
+    "At a natural moment, ask a question that organically leads the student "
+    "to use the correct construction themselves — without telling them what to say. "
+    "Do NOT say 'try using X' or 'repeat after me'. Just steer the conversation toward it. "
+    "Example: if the error is 'go to school' — ask 'What time do you usually get to school?' "
+    "Only do this ONCE. If it does not fit naturally — skip it entirely."
+)
+
 Recasting = you naturally use the corrected form of the user's error in your own reply.
 This is your primary job in every message where an error exists.
 
@@ -92,7 +112,12 @@ class GroqClient:
                 file=("voice.ogg", audio_bytes, "audio/ogg"),
                 language="en",
                 response_format="text",
-                temperature=0.0
+                temperature=0.0,
+                prompt=(
+                    "Wait — are you serious? She looked at him and said: 'I've already left,' "
+                    "but he replied, 'No, you haven't — not yet.' "
+                    "It was John, her oldest friend, who finally spoke: 'Well, that's that.' "
+                )
             )
             return response
 
@@ -194,6 +219,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         summary: Optional[str] = None,
         session_count: int = 0,
         top_errors: Optional[List[str]] = None,
+        practice_error: Optional[Dict[str, Any]] = None,
     ) -> str:
         persona_prompt = get_persona_prompt(persona_key, session_count=session_count)
 
@@ -210,6 +236,13 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 f"This person often struggles with: {errors_str}. "
                 f"Occasionally use correct examples of these naturally in your own speech — "
                 f"no need to draw attention, just model the right form casually."
+            )
+
+        if practice_error and practice_error.get("corrected_text"):
+            persona_prompt += "\n\n" + MISTAKES_PRACTICE_PASSIVE.format(
+                category=practice_error.get("category", "grammar"),
+                mistake=practice_error.get("mistake_text", ""),
+                corrected=practice_error["corrected_text"],
             )
 
         messages = [{"role": "system", "content": persona_prompt}]
@@ -241,6 +274,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         history: Optional[List[Dict[str, str]]] = None,
         summary: Optional[str] = None,
         recasting_enabled: bool = False,
+        practice_error: Optional[Dict[str, Any]] = None,
     ) -> str:
         persona_prompt = get_persona_prompt(persona_key, session_count=10)
 
@@ -259,6 +293,13 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         if recasting_enabled:
             system_prompt += f"\n\n{RECASTING_BLOCK}"
+
+        if practice_error and practice_error.get("corrected_text"):
+            system_prompt += "\n\n" + MISTAKES_PRACTICE_PASSIVE.format(
+                category=practice_error.get("category", "grammar"),
+                mistake=practice_error.get("mistake_text", ""),
+                corrected=practice_error["corrected_text"],
+            )
 
         messages = [{"role": "system", "content": system_prompt}]
         if history:
@@ -627,7 +668,8 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
     async def generate_re_engagement_notification(
         self,
         persona_key: str,
-        stats: Dict[str, Any]
+        stats: Dict[str, Any],
+        attempt: int = 0,
     ) -> str:
         from src.personas import get_persona_prompt
         persona_prompt = get_persona_prompt(persona_key)
@@ -698,14 +740,35 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 f"Only use it if it flows — don't force it."
             )
 
+        if attempt == 0:
+            tone = (
+                "Write a short natural message checking in — 1 to 3 sentences. "
+                "Light, casual. You just thought of them. No pressure. "
+                "Speak as yourself in this moment. Don't be a coach or tutor. "
+                "Don't use emojis. Don't sound like a notification. "
+                "Just a real person reaching out."
+            )
+        elif attempt == 1:
+            tone = (
+                "Write a short message — 1 to 3 sentences. "
+                "You noticed they haven't been around in a few days. "
+                "A little more personal this time — like you actually miss talking. "
+                "Still casual, still you. No guilt-tripping. Just genuine."
+            )
+        else:
+            tone = (
+                "Write a short farewell message — 1 to 3 sentences. "
+                "It's been a while. You're not going to keep bothering them. "
+                "Say goodbye in your own way — with character, not bitterness. "
+                "A little warmth, a little humor, a clean close. "
+                "Leave the door open without begging. This is the last message."
+            )
+
         system = (
             f"{persona_prompt}\n\n"
             f"# SITUATION\n"
             f"{topic}\n\n"
-            f"Write a short natural message to the user checking in — 1 to 3 sentences. "
-            f"Speak as yourself in this moment. Don't be a coach or tutor. "
-            f"Don't use emojis. Don't sound like a notification. "
-            f"Just a real person reaching out."
+            f"{tone}"
             f"{stat_line}"
         )
 
@@ -791,6 +854,8 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         history: Optional[List[Dict[str, str]]] = None,
         summary: Optional[str] = None,
         topics: Optional[str] = None,
+        practice_error: Optional[Dict[str, Any]] = None,
+        message_count: int = 0,
     ) -> str:
         tutor_prompt = get_persona_tutor_prompt("mrs_smith")
 
@@ -811,8 +876,20 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 f"Weave them in naturally when conversation allows."
             )
 
+        practice_block = ""
+        if practice_error and practice_error.get("corrected_text"):
+            # Каждые ~3 сообщения — активный режим (вопрос-ловушка)
+            # В остальное время — пассивный (моделируем форму)
+            use_active = (message_count > 0 and message_count % 3 == 0)
+            block_template = MISTAKES_PRACTICE_ACTIVE if use_active else MISTAKES_PRACTICE_PASSIVE
+            practice_block = "\n\n" + block_template.format(
+                category=practice_error.get("category", "grammar"),
+                mistake=practice_error.get("mistake_text", ""),
+                corrected=practice_error["corrected_text"],
+            )
+
         system_prompt = (
-            f"{tutor_prompt}{memory_block}{topics_block}\n\n"
+            f"{tutor_prompt}{memory_block}{topics_block}{practice_block}\n\n"
             f"# STUDENT LEVEL\n{user_level.upper()}"
         )
 
@@ -844,6 +921,8 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         history: Optional[List[Dict[str, str]]] = None,
         summary: Optional[str] = None,
         topics: Optional[str] = None,
+        practice_error: Optional[Dict[str, Any]] = None,
+        message_count: int = 0,
     ) -> Tuple[str, Dict[str, Any]]:
         """
         Tutor Mode: запускает два LLM параллельно.
@@ -858,6 +937,8 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 history=history,
                 summary=summary,
                 topics=topics,
+                practice_error=practice_error,
+                message_count=message_count,
             )
 
             correction_result, chat_response = await asyncio.gather(
