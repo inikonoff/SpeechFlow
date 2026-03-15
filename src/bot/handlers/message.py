@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 _originals_cache: Dict[int, str] = {}
-_display_cache: Dict[int, str] = {}  # display-версия с <b> тегами
+_display_cache: Dict[int, str] = {}  # HTML-версия с <b> для показа
 SUMMARY_MERGE_THRESHOLD = 4
 BUTTON_TEXTS = {
     "🎓 Tutor", "✉️ PenFriend", "🎙 Flow",
@@ -61,23 +61,6 @@ def _cache_persona_display(msg_id: int, persona_display: str):
 def _md_bold_to_html(text: str) -> str:
     """Конвертирует **bold** markdown в <b>bold</b> HTML для Telegram."""
     return re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text, flags=re.DOTALL)
-
-def _process_mistake_tags(text: str):
-    """
-    Принимает raw ответ с [MISTAKE:correct form] тегами.
-    Возвращает (clean, display):
-      clean   — без тегов, для TTS и сохранения в БД
-      display — теги заменены на <b>correct form</b>, для показа юзеру
-    """
-    import re as _re
-    clean   = _re.sub(r'\[MISTAKE:([^\]]+)\]', r'', text)
-    display = _re.sub(r'\[MISTAKE:([^\]]+)\]', r'<b></b>', html.escape(text))
-    # html.escape уже применён к display, но теги <b> вставлены до escape —
-    # нужно заэскейпить текст сначала, потом вставить теги
-    # Делаем правильно: сначала escape, потом замена
-    escaped = html.escape(text)
-    display = _re.sub(r'\[MISTAKE:([^\]]+)\]', r'<b></b>', escaped)
-    return clean, display
 
 def _penfriend_typing_delay(text: str) -> float:
     words = len(text.split())
@@ -317,7 +300,7 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
                 await safe_edit_reply_markup(sent, reply_markup=get_flow_voice_keyboard(sent.message_id))
         else:
             safe_greeting = html.escape(greeting)
-            sent = await callback.message.answer(f"💬 {safe_greeting}", parse_mode="HTML")
+            sent = await callback.message.answer(f"💬 {safe_greeting}\n\n<i>{persona_display}</i>", parse_mode="HTML")
             _cache_original(sent.message_id, greeting)
             await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
 
@@ -425,8 +408,9 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             await asyncio.sleep(delay)
             safe_response = html.escape(chat_response)
             display_response = _md_bold_to_html(safe_response)
-            sent = await message.answer(f"💬 {display_response}", parse_mode="HTML")
+            sent = await message.answer(f"💬 {display_response}\n\n<i>{persona_display}</i>", parse_mode="HTML")
             _cache_original(sent.message_id, chat_response)
+            _cache_display(sent.message_id, display_response)
             await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
         else:
             voice_bytes = await groq_client.text_to_speech(chat_response, voice=voice)
@@ -551,9 +535,9 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
             if safe_explanation:
                 spoiler_lines.append(f"💡 {safe_explanation}")
 
-            card_content = "\n".join(spoiler_lines)
+            spoiler_content = "\n".join(spoiler_lines)
             await message.answer(
-                f"<blockquote expandable>{card_content}</blockquote>",
+                f"<blockquote expandable>{spoiler_content}</blockquote>",
                 parse_mode="HTML"
             )
 
@@ -588,10 +572,12 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
                     reply_markup=get_flow_voice_keyboard(sent_voice.message_id)
                 )
         else:
-            response_clean, response_display = _process_mistake_tags(chat_response)
-            sent = await message.answer(f"💬 {response_display}", parse_mode="HTML")
-            _cache_original(sent.message_id, response_clean)  # чистый текст для перевода/TTS
-            _cache_display(sent.message_id, response_display)  # display для кнопки Original
+            safe_response = html.escape(chat_response)
+            display_response = _md_bold_to_html(safe_response)
+            persona_display = get_persona_display(user.get("persona", "mrs_smith"))
+            sent = await message.answer(f"💬 {display_response}\n\n<i>{html.escape(persona_display)}</i>", parse_mode="HTML")
+            _cache_original(sent.message_id, chat_response)
+            _cache_display(sent.message_id, display_response)
             await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
 
         if is_farewell:
@@ -614,8 +600,9 @@ async def handle_translate(callback: CallbackQuery):
             raw = callback.message.text or ""
             original_text = raw.removeprefix("💬 ").strip()
 
-        translation = await groq_client.translate_text(original_text)
-        safe_translation = _md_bold_to_html(html.escape(translation))
+        clean_for_translation = re.sub(r'\*\*(.+?)\*\*', r'\1', original_text, flags=re.DOTALL)
+        translation = await groq_client.translate_text(clean_for_translation)
+        safe_translation = html.escape(translation)
 
         from aiogram.utils.keyboard import InlineKeyboardBuilder
         from aiogram.types import InlineKeyboardButton
@@ -649,7 +636,7 @@ async def handle_original(callback: CallbackQuery):
             await callback.answer("Original text not available.", show_alert=True)
             return
 
-        # display_cache хранит уже готовый HTML с <b> тегами из [MISTAKE:...]
+        # Берём display-версию из кэша (с <b> тегами), или конвертируем на лету
         display_text = _display_cache.get(message_id)
         safe_original = display_text if display_text else _md_bold_to_html(html.escape(original_text))
 
@@ -686,9 +673,11 @@ async def flow_show_text(callback: CallbackQuery):
             await callback.answer("Text not available.", show_alert=True)
             return
         safe_text = html.escape(original)
+        persona_disp = _persona_display_cache.get(message_id, "")
+        caption_text = f"💬 {safe_text}\n\n<i>{html.escape(persona_disp)}</i>" if persona_disp else f"💬 {safe_text}"
         await safe_edit_caption(
             callback.message,
-            caption=f"💬 {safe_text}",
+            caption=caption_text,
             parse_mode="HTML",
             reply_markup=get_flow_voice_text_keyboard(message_id)
         )
