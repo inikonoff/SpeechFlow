@@ -588,15 +588,15 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
             "— For each language pattern: write a short pedagogical note — what this pattern is, "
             "why it trips learners up, ONE correct example you compose yourself, "
             "and ONE sentence explaining the rule in Russian. "
-            "Wrap this entire block (example + Russian rule) in <tg-spoiler> tags like this:\n"
-            "<tg-spoiler>✅ I have been working here for two years.\n"
-            "По-русски: Present Perfect Continuous используется для действий, которые начались в прошлом и продолжаются сейчас.</tg-spoiler>\n"
-            "Put the spoiler block on its own line, after your explanation of the pattern.\n"
+            "Wrap this entire block (example + Russian rule) in <blockquote> tags like this:\n"
+            "<blockquote>✅ I have been working here for two years.\n"
+            "По-русски: Present Perfect Continuous используется для действий, которые начались в прошлом и продолжаются сейчас.</blockquote>\n"
+            "Put the blockquote block on its own line, after your explanation of the pattern.\n"
             "— If no patterns: say something genuine about consistency or progress.\n"
             "— Close with a short personal note — something a real teacher would say.\n"
             "— NO markdown headers (no ###, no **). Use emojis to break sections if needed.\n"
             "— Max 350 words. Every sentence must earn its place.\n"
-            "— Use <tg-spoiler> tags exactly as shown. No other HTML tags."
+            "— Use <blockquote> tags exactly as shown. No other HTML tags."
         )
 
         async def _sunday(client):
