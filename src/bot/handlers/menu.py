@@ -474,6 +474,7 @@ async def start_broadcast(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Error.", show_alert=True)
 
 @router.message(AdminState.waiting_broadcast)
+@router.message(AdminState.waiting_broadcast)
 async def handle_broadcast_message(message: Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS:
         return
@@ -494,7 +495,13 @@ async def handle_broadcast_message(message: Message, state: FSMContext):
     sent_fail = 0
     for uid in user_ids:
         try:
-            await message.bot.send_message(uid, text)
+            # Отправляем сообщение и добавляем кнопку перевода
+            sent = await message.bot.send_message(uid, text)
+            await message.bot.edit_message_reply_markup(
+                chat_id=uid,
+                message_id=sent.message_id,
+                reply_markup=get_translate_keyboard(sent.message_id)
+            )
             sent_ok += 1
         except Exception:
             sent_fail += 1
