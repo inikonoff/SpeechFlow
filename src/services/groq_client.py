@@ -11,7 +11,7 @@ from src.personas import get_persona_prompt, get_persona_tutor_prompt
 
 logger = logging.getLogger(__name__)
 
-# ─── Recasting block — вставляется в промпт PenFriend когда recasting включён ──
+# ─── Recasting block — вставляется в промпт PenFriend когда recasting включён ──whisper
 
 RECASTING_BLOCK = """
 # RECASTING — MANDATORY OVERRIDE
@@ -108,7 +108,7 @@ class GroqClient:
     async def transcribe_audio(self, audio_bytes: bytes) -> Optional[str]:
         async def _transcribe(client):
             response = await client.audio.transcriptions.create(
-                model="whisper-large-v3",
+                model="whisper-large-v3-turbo",
                 file=("voice.ogg", audio_bytes, "audio/ogg"),
                 language="en",
                 response_format="text",
