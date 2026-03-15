@@ -528,9 +528,9 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
             if safe_explanation:
                 spoiler_lines.append(f"💡 {safe_explanation}")
 
-            spoiler_content = "\n".join(spoiler_lines)
+            card_content = "\n".join(spoiler_lines)
             await message.answer(
-                f"<tg-spoiler>{spoiler_content}</tg-spoiler>",
+                f"<blockquote>{card_content}</blockquote>",
                 parse_mode="HTML"
             )
 
