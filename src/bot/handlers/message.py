@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 _originals_cache: Dict[int, str] = {}
 _display_cache: Dict[int, str] = {}  # HTML-версия с <b> для показа
+_translation_cache: Dict[int, str] = {}  # кэш переводов
 SUMMARY_MERGE_THRESHOLD = 4
 BUTTON_TEXTS = {
     "🎓 Tutor", "✉️ PenFriend", "🎙 Flow",
@@ -47,6 +48,11 @@ def _cache_original(msg_id: int, text: str):
     if len(_originals_cache) > 5000:
         _originals_cache.clear()
     _originals_cache[msg_id] = text
+
+def _cache_translation(msg_id: int, text: str):
+    if len(_translation_cache) > 5000:
+        _translation_cache.clear()
+    _translation_cache[msg_id] = text
 
 def _cache_display(msg_id: int, text: str):
     if len(_display_cache) > 5000:
@@ -600,9 +606,16 @@ async def handle_translate(callback: CallbackQuery):
             raw = callback.message.text or ""
             original_text = raw.removeprefix("💬 ").strip()
 
-        clean_for_translation = re.sub(r'\*\*(.+?)\*\*', r'\1', original_text, flags=re.DOTALL)
-        translation = await groq_client.translate_text(clean_for_translation)
-        safe_translation = html.escape(translation)
+        # Берём из кэша если уже переводили это сообщение
+        cached_translation = _translation_cache.get(message_id)
+        if cached_translation:
+            safe_translation = cached_translation
+        else:
+            # Передаём оригинал с **bold** — LLM сохранит маркеры вокруг перевода
+            translation = await groq_client.translate_text(original_text)
+            # Конвертируем **bold** → <b>bold</b>, остальное экранируем
+            safe_translation = _md_bold_to_html(html.escape(translation))
+            _cache_translation(message_id, safe_translation)
 
         from aiogram.utils.keyboard import InlineKeyboardBuilder
         from aiogram.types import InlineKeyboardButton
