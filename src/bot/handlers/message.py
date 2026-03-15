@@ -553,7 +553,7 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
 
             card_content = "\n".join(spoiler_lines)
             await message.answer(
-                f"<blockquote>{card_content}</blockquote>",
+                f"<blockquote expandable>{card_content}</blockquote>",
                 parse_mode="HTML"
             )
 
