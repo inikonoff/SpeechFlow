@@ -255,7 +255,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 model="meta-llama/llama-4-scout-17b-16e-instruct",
                 messages=messages,
                 temperature=0.9,
-                max_tokens=300
+                max_tokens=130
             )
             return response.choices[0].message.content
 
@@ -311,7 +311,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 model="meta-llama/llama-4-scout-17b-16e-instruct",
                 messages=messages,
                 temperature=0.85,
-                max_tokens=200
+                max_tokens=130
             )
             return response.choices[0].message.content
 
@@ -903,7 +903,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 model="meta-llama/llama-4-scout-17b-16e-instruct",
                 messages=messages,
                 temperature=0.75,
-                max_tokens=300
+                max_tokens=130
             )
             return response.choices[0].message.content
 
