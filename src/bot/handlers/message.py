@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 _originals_cache: Dict[int, str] = {}
+_display_cache: Dict[int, str] = {}  # display-версия с <b> тегами
 SUMMARY_MERGE_THRESHOLD = 4
 BUTTON_TEXTS = {
     "🎓 Tutor", "✉️ PenFriend", "🎙 Flow",
@@ -47,6 +48,11 @@ def _cache_original(msg_id: int, text: str):
         _originals_cache.clear()
     _originals_cache[msg_id] = text
 
+def _cache_display(msg_id: int, text: str):
+    if len(_display_cache) > 5000:
+        _display_cache.clear()
+    _display_cache[msg_id] = text
+
 def _cache_persona_display(msg_id: int, persona_display: str):
     if len(_persona_display_cache) > 5000:
         _persona_display_cache.clear()
@@ -55,6 +61,23 @@ def _cache_persona_display(msg_id: int, persona_display: str):
 def _md_bold_to_html(text: str) -> str:
     """Конвертирует **bold** markdown в <b>bold</b> HTML для Telegram."""
     return re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text, flags=re.DOTALL)
+
+def _process_mistake_tags(text: str):
+    """
+    Принимает raw ответ с [MISTAKE:correct form] тегами.
+    Возвращает (clean, display):
+      clean   — без тегов, для TTS и сохранения в БД
+      display — теги заменены на <b>correct form</b>, для показа юзеру
+    """
+    import re as _re
+    clean   = _re.sub(r'\[MISTAKE:([^\]]+)\]', r'', text)
+    display = _re.sub(r'\[MISTAKE:([^\]]+)\]', r'<b></b>', html.escape(text))
+    # html.escape уже применён к display, но теги <b> вставлены до escape —
+    # нужно заэскейпить текст сначала, потом вставить теги
+    # Делаем правильно: сначала escape, потом замена
+    escaped = html.escape(text)
+    display = _re.sub(r'\[MISTAKE:([^\]]+)\]', r'<b></b>', escaped)
+    return clean, display
 
 def _penfriend_typing_delay(text: str) -> float:
     words = len(text.split())
@@ -565,9 +588,10 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
                     reply_markup=get_flow_voice_keyboard(sent_voice.message_id)
                 )
         else:
-            safe_response = html.escape(chat_response)
-            sent = await message.answer(f"💬 {safe_response}", parse_mode="HTML")
-            _cache_original(sent.message_id, chat_response)
+            response_clean, response_display = _process_mistake_tags(chat_response)
+            sent = await message.answer(f"💬 {response_display}", parse_mode="HTML")
+            _cache_original(sent.message_id, response_clean)  # чистый текст для перевода/TTS
+            _cache_display(sent.message_id, response_display)  # display для кнопки Original
             await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
 
         if is_farewell:
@@ -625,7 +649,9 @@ async def handle_original(callback: CallbackQuery):
             await callback.answer("Original text not available.", show_alert=True)
             return
 
-        safe_original = _md_bold_to_html(html.escape(original_text))
+        # display_cache хранит уже готовый HTML с <b> тегами из [MISTAKE:...]
+        display_text = _display_cache.get(message_id)
+        safe_original = display_text if display_text else _md_bold_to_html(html.escape(original_text))
 
         from aiogram.utils.keyboard import InlineKeyboardBuilder
         from aiogram.types import InlineKeyboardButton
