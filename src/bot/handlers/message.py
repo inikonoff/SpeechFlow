@@ -628,9 +628,11 @@ async def handle_translate(callback: CallbackQuery):
                     if "translate_" not in btn.callback_data and "original_" not in btn.callback_data:
                         builder.row(btn)
 
+        persona_disp = _persona_display_cache.get(message_id, "")
+        translation_body = f"🌐 {safe_translation}\n\n<i>{html.escape(persona_disp)}</i>" if persona_disp else f"🌐 {safe_translation}"
         await safe_edit_text(
             callback.message,
-            f"🌐 {safe_translation}",
+            translation_body,
             parse_mode="HTML",
             reply_markup=builder.as_markup()
         )
@@ -664,9 +666,11 @@ async def handle_original(callback: CallbackQuery):
                     if "translate_" not in btn.callback_data and "original_" not in btn.callback_data:
                         builder.row(btn)
 
+        persona_disp = _persona_display_cache.get(message_id, "")
+        original_body = f"💬 {safe_original}\n\n<i>{html.escape(persona_disp)}</i>" if persona_disp else f"💬 {safe_original}"
         await safe_edit_text(
             callback.message,
-            f"💬 {safe_original}",
+            original_body,
             parse_mode="HTML",
             reply_markup=builder.as_markup()
         )
