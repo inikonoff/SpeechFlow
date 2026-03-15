@@ -308,6 +308,7 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
             safe_greeting = html.escape(greeting)
             sent = await callback.message.answer(f"💬 {safe_greeting}\n\n<i>{persona_display}</i>", parse_mode="HTML")
             _cache_original(sent.message_id, greeting)
+            _cache_persona_display(sent.message_id, persona_display)
             await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
 
         await callback.answer()
@@ -417,6 +418,7 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             sent = await message.answer(f"💬 {display_response}\n\n<i>{persona_display}</i>", parse_mode="HTML")
             _cache_original(sent.message_id, chat_response)
             _cache_display(sent.message_id, display_response)
+            _cache_persona_display(sent.message_id, persona_display)
             await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
         else:
             voice_bytes = await groq_client.text_to_speech(chat_response, voice=voice)
@@ -584,6 +586,7 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
             sent = await message.answer(f"💬 {display_response}\n\n<i>{html.escape(persona_display)}</i>", parse_mode="HTML")
             _cache_original(sent.message_id, chat_response)
             _cache_display(sent.message_id, display_response)
+            _cache_persona_display(sent.message_id, persona_display)
             await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
 
         if is_farewell:
