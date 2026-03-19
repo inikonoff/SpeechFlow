@@ -11,11 +11,7 @@ from src.personas import get_persona_prompt, get_persona_tutor_prompt
 
 logger = logging.getLogger(__name__)
 
-# ─── Recasting block — вставляется в промпт PenFriend когда recasting включён ──whisper
-
-RECASTING_BLOCK = """
-# RECASTING — MANDATORY OVERRIDE
-IGNORE any previous instruction about not correcting grammar. In this mode you MUST recast.
+# ─── Recasting block — вставляется в промпт PenFriend когда recasting включён ──
 
 MISTAKES_PRACTICE_PASSIVE = (
     "# MISTAKES PRACTICE (passive)\n"
@@ -36,6 +32,10 @@ MISTAKES_PRACTICE_ACTIVE = (
     "Example: if the error is 'go to school' — ask 'What time do you usually get to school?' "
     "Only do this ONCE. If it does not fit naturally — skip it entirely."
 )
+
+RECASTING_BLOCK = """
+# RECASTING — MANDATORY OVERRIDE
+IGNORE any previous instruction about not correcting grammar. In this mode you MUST recast.
 
 Recasting = you naturally use the corrected form of the user's error in your own reply.
 This is your primary job in every message where an error exists.
@@ -108,7 +108,7 @@ class GroqClient:
     async def transcribe_audio(self, audio_bytes: bytes) -> Optional[str]:
         async def _transcribe(client):
             response = await client.audio.transcriptions.create(
-                model="whisper-large-v3-turbo",
+                model="whisper-large-v3",
                 file=("voice.ogg", audio_bytes, "audio/ogg"),
                 language="en",
                 response_format="text",
@@ -255,7 +255,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 model="meta-llama/llama-4-scout-17b-16e-instruct",
                 messages=messages,
                 temperature=0.9,
-                max_tokens=130
+                max_tokens=300
             )
             return response.choices[0].message.content
 
@@ -311,7 +311,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 model="meta-llama/llama-4-scout-17b-16e-instruct",
                 messages=messages,
                 temperature=0.85,
-                max_tokens=130
+                max_tokens=200
             )
             return response.choices[0].message.content
 
@@ -903,7 +903,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 model="meta-llama/llama-4-scout-17b-16e-instruct",
                 messages=messages,
                 temperature=0.75,
-                max_tokens=130
+                max_tokens=300
             )
             return response.choices[0].message.content
 
