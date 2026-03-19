@@ -80,7 +80,15 @@ async def transcribe_voice_with_groq(voice_file_bytes: bytes) -> str:
         ogg_path = await save_voice_file(voice_file_bytes, "ogg")
         try:
             audio_bytes = await read_file_bytes(ogg_path)
-            return await groq_client.transcribe_audio(audio_bytes)
+            text = await groq_client.transcribe_audio(audio_bytes)
+            # Убираем артефакты Whisper
+            if text:
+                import re as _re
+                text = _re.sub(
+                    r'[.\s]*(Subtitles by[^.]*[.]?|Amara[.]org[^.]*[.]?|Translated by[^.]*[.]?|transcribed by[^.]*[.]?)$',
+                    '', text, flags=_re.IGNORECASE
+                ).strip()
+            return text
         finally:
             await cleanup_file(ogg_path)
     except Exception as e:
@@ -500,7 +508,7 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
 
             safe_text = html.escape(user_text)
             sent_user = await message.answer(
-                f"🎤 <i>You said:</i> {safe_text}",
+                f"🎤 You said: {safe_text}",
                 parse_mode="HTML",
                 reply_markup=get_flow_user_voice_keyboard(0)
             )
@@ -735,7 +743,7 @@ async def uvoice_original(callback: CallbackQuery):
         safe_text = html.escape(user_text)
         await safe_edit_text(
             callback.message,
-            f"🎤 <i>{safe_text}</i>",
+            f"🎤 {safe_text}",
             parse_mode="HTML",
             reply_markup=get_flow_user_voice_text_keyboard(message_id)
         )
@@ -819,7 +827,7 @@ async def uvoice_show_text(callback: CallbackQuery):
         safe_text = html.escape(user_text)
         await safe_edit_text(
             callback.message,
-            f"🎤 <i>{safe_text}</i>",
+            f"🎤 {safe_text}",
             parse_mode="HTML",
             reply_markup=get_flow_user_voice_text_keyboard(message_id)
         )
@@ -845,7 +853,7 @@ async def uvoice_translate(callback: CallbackQuery):
             _cache_translation(message_id, safe_translation)
         await safe_edit_text(
             callback.message,
-            f"🌐 <i>{safe_translation}</i>",
+            f"🌐 {safe_translation}",
             parse_mode="HTML",
             reply_markup=get_flow_user_voice_translate_keyboard(message_id)
         )
