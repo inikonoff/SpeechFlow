@@ -13,10 +13,6 @@ logger = logging.getLogger(__name__)
 
 # ─── Recasting block — вставляется в промпт PenFriend когда recasting включён ──
 
-RECASTING_BLOCK = """
-# RECASTING — MANDATORY OVERRIDE
-IGNORE any previous instruction about not correcting grammar. In this mode you MUST recast.
-
 MISTAKES_PRACTICE_PASSIVE = (
     "# MISTAKES PRACTICE (passive)\n"
     "One of this person's recent errors: {category} — "
@@ -36,6 +32,10 @@ MISTAKES_PRACTICE_ACTIVE = (
     "Example: if the error is 'go to school' — ask 'What time do you usually get to school?' "
     "Only do this ONCE. If it does not fit naturally — skip it entirely."
 )
+
+RECASTING_BLOCK = """
+# RECASTING — MANDATORY OVERRIDE
+IGNORE any previous instruction about not correcting grammar. In this mode you MUST recast.
 
 Recasting = you naturally use the corrected form of the user's error in your own reply.
 This is your primary job in every message where an error exists.
