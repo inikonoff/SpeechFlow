@@ -13,6 +13,10 @@ logger = logging.getLogger(__name__)
 
 # ─── Recasting block — вставляется в промпт PenFriend когда recasting включён ──
 
+RECASTING_BLOCK = """
+# RECASTING — MANDATORY OVERRIDE
+IGNORE any previous instruction about not correcting grammar. In this mode you MUST recast.
+
 MISTAKES_PRACTICE_PASSIVE = (
     "# MISTAKES PRACTICE (passive)\n"
     "One of this person's recent errors: {category} — "
@@ -32,10 +36,6 @@ MISTAKES_PRACTICE_ACTIVE = (
     "Example: if the error is 'go to school' — ask 'What time do you usually get to school?' "
     "Only do this ONCE. If it does not fit naturally — skip it entirely."
 )
-
-RECASTING_BLOCK = """
-# RECASTING — MANDATORY OVERRIDE
-IGNORE any previous instruction about not correcting grammar. In this mode you MUST recast.
 
 Recasting = you naturally use the corrected form of the user's error in your own reply.
 This is your primary job in every message where an error exists.
@@ -600,19 +600,28 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         msgs_this_week = stats.get("msgs_this_week", 0)
         streak = stats.get("streak_days", 0)
 
-        # Только категории — без примеров речи юзера
+        # Реальные фразы пользователя — не придуманные примеры
         if errors:
-            patterns = ", ".join(
-                e.get("category", "").strip()
-                for e in errors[:5]
-                if e.get("category")
-            )
+            patterns_lines = []
+            for e in errors[:4]:
+                cat = e.get("category", "").strip()
+                mistake = e.get("examples", [None])[0] if e.get("examples") else None
+                corrected = e.get("corrected_text", "") or ""
+                if not cat:
+                    continue
+                if mistake and corrected:
+                    patterns_lines.append(f'- {cat}: user said "{mistake}" → correct: "{corrected}"')
+                elif mistake:
+                    patterns_lines.append(f'- {cat}: user said "{mistake}"')
+                else:
+                    patterns_lines.append(f'- {cat}')
+            patterns_block = "Patterns from this week's conversations:\n" + "\n".join(patterns_lines) if patterns_lines else None
         else:
-            patterns = None
+            patterns_block = None
 
-        patterns_block = (
-            f"Patterns noticed this week: {patterns}"
-            if patterns
+        patterns_section = (
+            patterns_block
+            if patterns_block
             else "No recurring patterns this week — conversations flowed well."
         )
 
@@ -622,21 +631,21 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
             "Write a personal weekly note to your student. "
             "You have been quietly observing their English this week.\n\n"
             f"Facts: {msgs_this_week} messages from the student this week. Streak: {streak} days.\n"
-            f"{patterns_block}\n\n"
+            f"{patterns_section}\n\n"
             "# WRITING RULES\n"
             "— Warm and personal, like a letter, not a report card.\n"
             "— Mention the message count naturally in the opening as \"X messages from you\".\n"
-            "— For each language pattern: write a short pedagogical note — what this pattern is, "
-            "why it trips learners up, ONE correct example you compose yourself, "
-            "and ONE sentence explaining the rule in Russian. "
-            "Wrap this entire block (example + Russian rule) in <blockquote> tags like this:\n"
-            "<blockquote>✅ I have been working here for two years.\n"
-            "По-русски: Present Perfect Continuous используется для действий, которые начались в прошлом и продолжаются сейчас.</blockquote>\n"
-            "Put the blockquote block on its own line, after your explanation of the pattern.\n"
+            "— For each pattern: use the EXACT quote from the student's speech (provided above). "
+            "Show what they said and how it should sound. "
+            "Wrap the example block in <blockquote> tags like this:\n"
+            "<blockquote>❌ Вы сказали: \"I work in Monday\"\n"
+            "✅ Правильно: \"I work on Monday\"\n"
+            "По-русски: с днями недели используется предлог on, не in.</blockquote>\n"
+            "Put the blockquote on its own line. Never invent examples — only use the student's real words.\n"
             "— If no patterns: say something genuine about consistency or progress.\n"
             "— Close with a short personal note — something a real teacher would say.\n"
-            "— NO markdown headers (no ###, no **). Use emojis to break sections if needed.\n"
-            "— Max 350 words. Every sentence must earn its place.\n"
+            "— NO markdown headers (no ###, no **bold**). Emojis are fine to break sections.\n"
+            "— Max 300 words. Every sentence must earn its place.\n"
             "— Use <blockquote> tags exactly as shown. No other HTML tags."
         )
 
