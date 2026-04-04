@@ -66,10 +66,10 @@ def get_daily_voice_limit(subscription_plan: str) -> int:
 # Заполнить после загрузки WAV-файлов в Telegram через временный хендлер.
 # Инструкция: отправь боту файл как документ → хендлер ответит file_id.
 
-ONBOARDING_VOICE_START        = ""  # voice_start.wav
-ONBOARDING_VOICE_BEGINNER     = ""  # voice_beginner.wav
-ONBOARDING_VOICE_INTERMEDIATE = ""  # voice_intermediate.wav
-ONBOARDING_VOICE_ADVANCED     = ""  # voice_advanced.wav
+ONBOARDING_VOICE_START        = "BQACAgIAAxkBAAIL12nRRgrRae5fcAeaSsTdxjFKVDioAAISmgACvTiIShjVShybL58eOwQ"  # voice_start.wav
+ONBOARDING_VOICE_BEGINNER     = "BQACAgIAAxkBAAIL1WnRRe2obDwSauuWM-H6m4IDhXhwAAIQmgACvTiISp5CDKr5ICBCOwQ"  # voice_beginner.wav
+ONBOARDING_VOICE_INTERMEDIATE = "BQACAgIAAxkBAAIL02nRRdl1SAPr9bgRdREbVUvPYYnHAAIOmgACvTiISjIC6iavQXeFOwQ"  # voice_intermediate.wav
+ONBOARDING_VOICE_ADVANCED     = "BQACAgIAAxkBAAIL0WnRRG1WXV_NBTDiw8EjRlI4YM6sAAL_mQACvTiISjCAn6KYYxS_OwQ"  # voice_advanced.wav
 
 # Тексты для спойлеров под каждым голосовым (оригинал + перевод)
 ONBOARDING_SPOILERS = {
