@@ -145,8 +145,8 @@ async def onboarding_first_message(message: Message, state: FSMContext):
 
         # Передаём сообщение дальше в основной хендлер Tutor
         # (re-dispatch через FSM невозможен, поэтому просто обрабатываем текст здесь)
-        from src.bot.handlers.message import handle_tutor_message
-        await handle_tutor_message(message, state)
+        from src.bot.handlers.message import handle_message
+        await handle_message(message, state)
 
     except Exception as e:
         logger.error(f"Error in onboarding first message: {e}")
