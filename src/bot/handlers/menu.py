@@ -278,11 +278,6 @@ async def cq_toggle_mistakes_practice(callback: CallbackQuery):
         logger.error(f"Error toggling mistakes practice: {e}")
         await callback.answer("Error.", show_alert=True)
 
-@router.callback_query(F.data == "change_level")
-async def cq_change_level(callback: CallbackQuery):
-    await safe_edit_text(callback.message, "Select your English level:", reply_markup=get_level_keyboard())
-    await callback.answer()
-
 @router.callback_query(F.data == "back_to_menu")
 async def back_to_menu(callback: CallbackQuery):
     try:
