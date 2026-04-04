@@ -147,6 +147,7 @@ async def lifespan(app: FastAPI):
     dp.include_router(level.router)
     dp.include_router(menu.router)
     dp.include_router(message.router)
+    dp.include_router(level.router)
     
     await bot.delete_webhook(drop_pending_updates=True)
     
