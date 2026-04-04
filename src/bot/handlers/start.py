@@ -50,7 +50,6 @@ async def _send_onboarding_voice(message: Message, file_id: str, spoiler_key: st
     if file_id:
         await message.answer_voice(file_id)
     else:
-        # Заглушка если file_id ещё не заполнен
         logger.warning(f"Onboarding voice file_id for '{spoiler_key}' is empty")
     await message.answer(_make_spoiler(spoiler_key), parse_mode="HTML")
 
@@ -70,7 +69,7 @@ async def cmd_start(message: Message, state: FSMContext):
             await _start_onboarding(message, state)
             return
 
-        # Существующий пользователь → просто сброс состояния + меню
+        # Существующий пользователь → сброс состояния + меню
         await message.answer(
             "Welcome back! Choose your mode:",
             reply_markup=get_mode_keyboard()
@@ -100,7 +99,6 @@ async def onboarding_level_selected(callback: CallbackQuery, state: FSMContext):
         await db.update_user_level(user_id, level)
         await callback.message.edit_reply_markup(reply_markup=None)
 
-        # Голосовое реакции на уровень
         voice_map = {
             "beginner":     (ONBOARDING_VOICE_BEGINNER,     "beginner"),
             "intermediate": (ONBOARDING_VOICE_INTERMEDIATE, "intermediate"),
@@ -129,7 +127,6 @@ async def onboarding_first_message(message: Message, state: FSMContext):
         await db.complete_onboarding(user_id)
         await state.clear()
 
-        # Активируем Tutor Mode с Mrs. Smith как точку входа после онбординга
         from src.modes import MODE_TUTOR
         from src.personas import get_persona_voice
         await db.update_mode(user_id, MODE_TUTOR)
@@ -143,8 +140,7 @@ async def onboarding_first_message(message: Message, state: FSMContext):
             reply_markup=get_mode_keyboard()
         )
 
-        # Передаём сообщение дальше в основной хендлер Tutor
-        # (re-dispatch через FSM невозможен, поэтому просто обрабатываем текст здесь)
+        # Передаём первое сообщение сразу в основной хендлер
         from src.bot.handlers.message import handle_message
         await handle_message(message, state)
 
@@ -152,35 +148,41 @@ async def onboarding_first_message(message: Message, state: FSMContext):
         logger.error(f"Error in onboarding first message: {e}")
         await message.answer("Something went wrong. Please try again.")
 
-# ─── Временный хендлер для получения file_id голосовых ───────────────────────
-# УДАЛИТЬ после заполнения ONBOARDING_VOICE_* в config.py
+# ─── Хендлеры для получения file_id голосовых онбординга ─────────────────────
+# Только для администраторов. Удалить после заполнения ONBOARDING_VOICE_* в config.py.
 
 @router.message(F.voice, lambda m: m.from_user.id in ADMIN_IDS)
 async def get_voice_file_id(message: Message):
+    """
+    Отправь боту голосовое сообщение (WAV через "Send as voice message") —
+    получишь voice file_id для вставки в ONBOARDING_VOICE_*.
+    """
     file_id = message.voice.file_id
+    duration = message.voice.duration
     await message.answer(
-        f"🎤 <b>Voice file_id:</b>\n\n<code>{file_id}</code>",
+        f"🎤 <b>Voice file_id</b> ({duration}s):\n\n"
+        f"<code>{file_id}</code>\n\n"
+        f"Вставь в нужную константу ONBOARDING_VOICE_* в config.py",
         parse_mode="HTML"
     )
-@router.message(F.document, F.document.file_name.endswith((".wav", ".ogg", ".mp3")), lambda m: m.from_user.id in ADMIN_IDS)
-async def get_file_id(message: Message):
+
+@router.message(
+    F.document,
+    F.document.file_name.func(lambda name: name and name.endswith((".wav", ".ogg", ".mp3"))),
+    lambda m: m.from_user.id in ADMIN_IDS
+)
+async def get_document_file_id(message: Message):
     """
-    Отправь боту любой WAV как документ — получишь file_id в ответ.
-    Только для администраторов. Удалить после заполнения config.py.
+    Документ с расширением wav/ogg/mp3 — возвращает document file_id.
+    Внимание: этот file_id не будет воспроизводиться как голосовое.
+    Используй хендлер выше (голосовое сообщение) для онбординга.
     """
     file_id = message.document.file_id
     file_name = message.document.file_name or "unknown"
     await message.answer(
         f"📎 <b>{html.escape(file_name)}</b>\n\n"
         f"<code>{file_id}</code>\n\n"
-        f"Скопируй в config.py в нужную константу ONBOARDING_VOICE_*",
-        parse_mode="HTML"
-    )
-    
-@router.message(F.voice, lambda m: m.from_user.id in ADMIN_IDS)
-async def get_voice_file_id(message: Message):
-    file_id = message.voice.file_id
-    await message.answer(
-        f"🎤 voice file_id:\n\n<code>{file_id}</code>",
+        f"⚠️ Это document file_id — для голосовых онбординга нужен voice file_id.\n"
+        f"Отправь файл как голосовое сообщение (Send as voice message).",
         parse_mode="HTML"
     )
