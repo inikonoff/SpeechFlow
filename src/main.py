@@ -144,7 +144,6 @@ async def lifespan(app: FastAPI):
     dp.update.middleware(UserMiddleware())
     
     dp.include_router(start.router)
-    dp.include_router(level.router)
     dp.include_router(menu.router)
     dp.include_router(message.router)
     dp.include_router(level.router)
