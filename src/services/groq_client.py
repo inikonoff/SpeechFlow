@@ -963,5 +963,224 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
             logger.error(f"Error processing tutor message: {e}")
             return "Sorry, I encountered an error. Please try again.", {}
 
+        # ─── Реакция Mrs. Smith на смену уровня ───────────────────────────────
+    # ВСТАВИТЬ в класс GroqClient перед последней строкой файла:
+    # groq_client = GroqClient(settings.groq_api_keys_list)
+
+    async def generate_level_change_reaction(
+        self,
+        old_level: str,
+        new_level: str,
+    ) -> str:
+        """
+        Живая TTS-реакция Mrs. Smith на повышение уровня.
+        ~2 предложения, тёплая, личная, без «Great job!».
+        Вызывается только при повышении (beginner→intermediate и т.д.).
+        """
+        direction = "up"  # этот метод вызывается только при повышении
+        system = (
+            "You are Mrs. Smith — a warm, observant English teacher with 20+ years of experience.\n"
+            "A student just moved up a level in their English practice app.\n\n"
+            "Write a SHORT personal reaction — 2 sentences maximum.\n"
+            "Rules:\n"
+            "- Be genuine and warm, not a cheerleader. No 'Great job!' or 'Wonderful!'.\n"
+            "- Reference the specific levels naturally (e.g. 'moving to Intermediate').\n"
+            "- End with a simple forward-looking thought — what this level means for them.\n"
+            "- Speak as if you've been watching their progress. You noticed.\n"
+            "- Never use ellipses, em-dashes as pauses, or trailing fragments.\n"
+            "- Max 40 words total."
+        )
+
+        user_msg = (
+            f"The student just moved from {old_level} to {new_level} level. "
+            f"Write your reaction."
+        )
+
+        async def _react(client):
+            response = await client.chat.completions.create(
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user",   "content": user_msg},
+                ],
+                temperature=0.8,
+                max_tokens=80,
+            )
+            return response.choices[0].message.content.strip()
+
+        try:
+            return await self._make_request(_react)
+        except Exception as e:
+            logger.error(f"❌ Ошибка level change reaction: {e}")
+            return f"Moving to {new_level.capitalize()} — that's real progress. Let's see what you can do with it."
+
+    # ─── PenFriend: мультибабл (Блок 2) ───────────────────────────────────
+
+    async def generate_penfriend_multibubble(
+        self,
+        text: str,
+        persona_key: str,
+        history: Optional[List[Dict[str, str]]] = None,
+        summary: Optional[str] = None,
+        recasting_enabled: bool = False,
+        practice_error: Optional[Dict[str, Any]] = None,
+    ) -> List[str]:
+        """
+        PenFriend ответ для Greg, Jane, Summer, Junior — несколько коротких сообщений.
+        Возвращает список строк (1–3 сообщения).
+        Mrs. Smith и Mark возвращают список из одного элемента (обычный ответ).
+        """
+        # Mrs. Smith и Mark — одно сообщение, без мультибабла
+        if persona_key in ("mrs_smith", "mark"):
+            single = await self.generate_penfriend_response(
+                text, persona_key,
+                history=history,
+                summary=summary,
+                recasting_enabled=recasting_enabled,
+                practice_error=practice_error,
+            )
+            return [single]
+
+        persona_prompt = get_persona_prompt(persona_key, session_count=10)
+
+        system_prompt = (
+            f"{persona_prompt}\n\n"
+            "# PENFRIEND MULTIBUBBLE MODE\n"
+            "You are texting — like a real person, not writing an essay.\n"
+            "Real people split their thoughts into separate short messages.\n\n"
+            "# YOUR TASK\n"
+            "Reply as 2–3 separate text messages. Choose ONE of these styles:\n\n"
+            "Style A — Split thought:\n"
+            "  Message 1: start a thought\n"
+            "  Message 2: finish or expand it\n"
+            "  Message 3 (optional): follow-up question or reaction\n\n"
+            "Style B — Emotion + content:\n"
+            "  Message 1: short emotional reaction (e.g. 'Wait seriously??')\n"
+            "  Message 2: your actual response\n\n"
+            "# RULES\n"
+            "- Each message: 1–3 sentences max\n"
+            "- Natural casual English — contractions, shorthand fine\n"
+            "- NO greetings, NO sign-offs, NO 'Hey!' at the start\n"
+            "- Translate button appears only under the last message — write accordingly\n"
+        )
+
+        if summary:
+            system_prompt += (
+                f"\n\n# WHAT YOU KNOW ABOUT THIS PERSON\n{summary}\n"
+                "Use this naturally, never dump it all at once."
+            )
+
+        if recasting_enabled:
+            system_prompt += f"\n\n{RECASTING_BLOCK}\nApply recasting in one of the messages where it fits naturally."
+
+        if practice_error and practice_error.get("corrected_text"):
+            system_prompt += "\n\n" + MISTAKES_PRACTICE_PASSIVE.format(
+                category=practice_error.get("category", "grammar"),
+                mistake=practice_error.get("mistake_text", ""),
+                corrected=practice_error["corrected_text"],
+            )
+
+        system_prompt += (
+            '\n\n# OUTPUT FORMAT\n'
+            'Return ONLY valid JSON. No markdown, no preamble.\n'
+            '{"messages": ["first message", "second message", "optional third"]}'
+        )
+
+        messages = [{"role": "system", "content": system_prompt}]
+        if history:
+            messages.extend(history)
+        messages.append({"role": "user", "content": text})
+
+        async def _multibubble(client):
+            response = await client.chat.completions.create(
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                messages=messages,
+                temperature=0.85,
+                max_tokens=250,
+                response_format={"type": "json_object"},
+            )
+            return response.choices[0].message.content
+
+        try:
+            raw = await self._make_request(_multibubble)
+            parsed = json.loads(raw)
+            msgs = parsed.get("messages", [])
+            # Страховка: если вернул строку вместо списка
+            if isinstance(msgs, str):
+                return [msgs]
+            # Убираем пустые сообщения
+            msgs = [m.strip() for m in msgs if m and m.strip()]
+            return msgs if msgs else ["Ha, interesting. Tell me more."]
+        except Exception as e:
+            logger.error(f"❌ Ошибка PenFriend multibubble: {e}")
+            return ["Ha, interesting. Tell me more."]
+
+    # ─── Автооценка уровня (Блок 2) ───────────────────────────────────────
+
+    async def assess_user_level(
+        self,
+        messages: List[Dict[str, str]],
+        current_level: str,
+    ) -> Dict[str, str]:
+        """
+        Анализирует последние 10 сообщений пользователя и оценивает уровень.
+        Запускается каждые 10 сообщений в handle_flow_message и handle_tutor_message.
+
+        Возвращает:
+        {
+            "assessed_level": "intermediate",  # beginner/elementary/intermediate/advanced
+            "confidence": "high"               # high/low
+        }
+        Если confidence != "high" или assessed_level == current_level → ничего не делать.
+        Если assessed_level выше current_level и confidence == "high" → предложить повышение.
+        """
+        # Берём только реплики пользователя
+        user_msgs = [
+            m["content"] for m in messages
+            if m.get("role") == "user" and m.get("content", "").strip()
+        ]
+        if not user_msgs:
+            return {"assessed_level": current_level, "confidence": "low"}
+
+        sample = "\n".join(f"- {m}" for m in user_msgs[-10:])
+
+        system = (
+            "You assess English proficiency from a sample of spoken/written messages.\n\n"
+            "Levels: beginner, elementary, intermediate, advanced\n\n"
+            "Criteria:\n"
+            "- beginner: very simple sentences, many basic errors, limited vocabulary\n"
+            "- elementary: simple sentences with common errors, basic vocabulary\n"
+            "- intermediate: mostly correct sentences, some grammar issues, decent vocabulary\n"
+            "- advanced: complex sentences, rare errors, wide vocabulary, natural flow\n\n"
+            "confidence = 'high' only if the sample clearly and consistently matches a level.\n"
+            "confidence = 'low' if the sample is too short, mixed, or ambiguous.\n\n"
+            "Return ONLY valid JSON, no markdown:\n"
+            '{"assessed_level": "...", "confidence": "high|low"}'
+        )
+
+        async def _assess(client):
+            response = await client.chat.completions.create(
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user",   "content": f"Current declared level: {current_level}\n\nMessages:\n{sample}"},
+                ],
+                temperature=0.0,
+                max_tokens=50,
+                response_format={"type": "json_object"},
+            )
+            return response.choices[0].message.content
+
+        try:
+            raw = await self._make_request(_assess)
+            parsed = json.loads(raw)
+            return {
+                "assessed_level": parsed.get("assessed_level", current_level),
+                "confidence": parsed.get("confidence", "low"),
+            }
+        except Exception as e:
+            logger.error(f"❌ Ошибка автооценки уровня: {e}")
+            return {"assessed_level": current_level, "confidence": "low"}
+
 
 groq_client = GroqClient(settings.groq_api_keys_list)
