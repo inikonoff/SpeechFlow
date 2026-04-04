@@ -1080,7 +1080,8 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         system_prompt += (
             '\n\n# OUTPUT FORMAT\n'
-            'Return ONLY valid JSON. No markdown, no preamble.\n'
+            'Return ONLY valid JSON. No markdown wrapping, no preamble.\n'
+            'Message strings MAY contain **double asterisks** around recasted phrases — this is required and must be preserved as-is.\n'
             '{"messages": ["first message", "second message", "optional third"]}'
         )
 
