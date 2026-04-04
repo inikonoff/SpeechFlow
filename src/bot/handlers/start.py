@@ -169,3 +169,11 @@ async def get_file_id(message: Message):
         f"Скопируй в config.py в нужную константу ONBOARDING_VOICE_*",
         parse_mode="HTML"
     )
+    
+@router.message(F.voice, lambda m: m.from_user.id in ADMIN_IDS)
+async def get_voice_file_id(message: Message):
+    file_id = message.voice.file_id
+    await message.answer(
+        f"🎤 voice file_id:\n\n<code>{file_id}</code>",
+        parse_mode="HTML"
+    )
