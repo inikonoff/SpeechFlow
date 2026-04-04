@@ -963,9 +963,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
             logger.error(f"Error processing tutor message: {e}")
             return "Sorry, I encountered an error. Please try again.", {}
 
-        # ─── Реакция Mrs. Smith на смену уровня ───────────────────────────────
-    # ВСТАВИТЬ в класс GroqClient перед последней строкой файла:
-    # groq_client = GroqClient(settings.groq_api_keys_list)
+    # ─── Реакция Mrs. Smith на смену уровня ───────────────────────────────
 
     async def generate_level_change_reaction(
         self,
