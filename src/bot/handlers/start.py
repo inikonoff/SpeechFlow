@@ -155,7 +155,14 @@ async def onboarding_first_message(message: Message, state: FSMContext):
 # ─── Временный хендлер для получения file_id голосовых ───────────────────────
 # УДАЛИТЬ после заполнения ONBOARDING_VOICE_* в config.py
 
-@router.message(F.document, lambda m: m.from_user.id in ADMIN_IDS)
+@router.message(F.voice, lambda m: m.from_user.id in ADMIN_IDS)
+async def get_voice_file_id(message: Message):
+    file_id = message.voice.file_id
+    await message.answer(
+        f"🎤 <b>Voice file_id:</b>\n\n<code>{file_id}</code>",
+        parse_mode="HTML"
+    )
+@router.message(F.document, F.document.file_name.endswith((".wav", ".ogg", ".mp3")), lambda m: m.from_user.id in ADMIN_IDS)
 async def get_file_id(message: Message):
     """
     Отправь боту любой WAV как документ — получишь file_id в ответ.
