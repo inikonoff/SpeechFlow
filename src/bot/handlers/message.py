@@ -496,7 +496,17 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
 
         if active_mode == MODE_PENFRIEND:
             # Мультибабл: последовательная отправка с typing-задержками
-            # Translate только под последним сообщением
+            # Translate только под последним сообщением — переводит ВСЕ баблы этого ответа
+
+            # Готовим объединённый текст всех баблов для кэша (вариант Б)
+            # _originals_cache хранит сырой текст БЕЗ **bold** — чтобы не путать LLM-акцент с recasting
+            all_bubbles_raw = "\n\n".join(
+                re.sub(r'\*\*(.+?)\*\*', r'\1', b) for b in pf_bubbles
+            )
+            all_bubbles_display = "\n\n".join(
+                _md_bold_to_html(html.escape(b)) for b in pf_bubbles
+            )
+
             for i, bubble in enumerate(pf_bubbles):
                 is_last = (i == len(pf_bubbles) - 1)
                 delay = _penfriend_typing_delay(bubble)
@@ -509,8 +519,9 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
                         f"💬 {display_bubble}\n\n<i>{persona_display}</i>",
                         parse_mode="HTML"
                     )
-                    _cache_original(sent.message_id, bubble)
-                    _cache_display(sent.message_id, display_bubble)
+                    # Кэшируем объединённый текст всех баблов — Translate покажет весь ответ
+                    _cache_original(sent.message_id, all_bubbles_raw)
+                    _cache_display(sent.message_id, all_bubbles_display)
                     _cache_persona_display(sent.message_id, persona_display)
                     await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
                 else:
