@@ -584,4 +584,29 @@ class SupabaseDB:
             logger.error(f"Error getting recent errors: {e}")
             return []
 
+    # ─── Онбординг ─────────────────────────────────────────────────────────
+
+    async def complete_onboarding(self, telegram_id: int) -> bool:
+        """Помечает онбординг как завершённый."""
+        return await self.update_user(telegram_id, {"onboarding_completed": True})
+
+    # ─── Счётчик сообщений для автооценки уровня ───────────────────────────
+
+    async def get_user_message_count(self, user_id: int) -> int:
+        """
+        Возвращает общее количество сообщений пользователя (role='user').
+        Используется для триггера автооценки каждые 10 сообщений.
+        """
+        try:
+            response = (self.client.table("messages")
+                        .select("id", count="exact")
+                        .eq("user_id", user_id)
+                        .eq("role", "user")
+                        .execute())
+            return response.count or 0
+        except Exception as e:
+            logger.error(f"Error getting message count for user {user_id}: {e}")
+            return 0
+
+
 db = SupabaseDB()
