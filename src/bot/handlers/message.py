@@ -165,6 +165,53 @@ async def _background_flow_error_check(user_id: int, user_text: str, user_level:
     except Exception as e:
         logger.error(f"Error in background flow error check for user {user_id}: {e}")
 
+# ─── Автооценка уровня (fire-and-forget) ─────────────────────────────────────
+
+LEVEL_ORDER = ["beginner", "elementary", "intermediate", "advanced"]
+
+async def _run_level_assessment(user_id: int, current_level: str, message: Message) -> None:
+    """
+    Запускается каждые 10 сообщений пользователя через asyncio.create_task.
+    Если assessed_level выше current_level и confidence == 'high' →
+    Mrs. Smith органично предлагает повысить уровень одним сообщением в чат.
+    Никогда не меняет уровень автоматически.
+    """
+    try:
+        history = await db.get_history(user_id, limit=20)
+        if not history:
+            return
+
+        result = await groq_client.assess_user_level(history, current_level)
+        assessed = result.get("assessed_level", current_level)
+        confidence = result.get("confidence", "low")
+
+        if confidence != "high":
+            return
+
+        try:
+            current_rank = LEVEL_ORDER.index(current_level.lower())
+            assessed_rank = LEVEL_ORDER.index(assessed.lower())
+        except ValueError:
+            return
+
+        if assessed_rank <= current_rank:
+            return
+
+        # Уровень выше и уверенность высокая → Mrs. Smith предлагает повысить
+        assessed_label = assessed.capitalize()
+        current_label = current_level.capitalize()
+        suggestion = (
+            f"📚 <i>Mrs. Smith noticed something:</i>\n\n"
+            f"Your English has been sounding more like <b>{assessed_label}</b> lately. "
+            f"You're still set to {current_label} — would you like to move up?\n\n"
+            f"You can change your level anytime in /settings."
+        )
+        await message.answer(suggestion, parse_mode="HTML")
+        logger.info(f"Level assessment for user {user_id}: {current_level} → {assessed} (high confidence)")
+
+    except Exception as e:
+        logger.error(f"Error in _run_level_assessment for user {user_id}: {e}")
+
 # ─── Mode activation ──────────────────────────────────────────────────────────
 
 @router.message(F.text == "🎙 Flow")
@@ -383,6 +430,13 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
         if user.get("reengagement_count", 0):
             asyncio.create_task(db.reset_reengagement(user_id))
 
+        # Автооценка уровня каждые 10 сообщений — fire-and-forget
+        msg_count = await db.get_user_message_count(user_id)
+        if msg_count > 0 and msg_count % 10 == 0:
+            asyncio.create_task(
+                _run_level_assessment(user_id, user_level, message)
+            )
+
         farewell_task = asyncio.create_task(groq_client.detect_farewell(user_text))
         history_task = asyncio.create_task(db.get_history(user_id, limit=settings.CONTEXT_WINDOW))
         summary_task = asyncio.create_task(db.get_latest_summary(user_id))
@@ -405,7 +459,7 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
                 if recent:
                     import random
                     pf_practice_error = random.choice(recent)
-            chat_response = await groq_client.generate_penfriend_response(
+            pf_bubbles = await groq_client.generate_penfriend_multibubble(
                 text=user_text,
                 persona_key=persona_key,
                 history=history,
@@ -413,6 +467,8 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
                 recasting_enabled=recasting_enabled,
                 practice_error=pf_practice_error,
             )
+            # Используем последнее сообщение как chat_response для сохранения в БД
+            chat_response = " ".join(pf_bubbles)
         else:
             # Flow Mode: генерируем ответ и запускаем фоновый анализ ошибок
             practice_error = None
@@ -439,16 +495,26 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
         persona_display = get_persona_display(persona_key)
 
         if active_mode == MODE_PENFRIEND:
-            delay = _penfriend_typing_delay(chat_response)
-            await message.bot.send_chat_action(user_id, "typing")
-            await asyncio.sleep(delay)
-            safe_response = html.escape(chat_response)
-            display_response = _md_bold_to_html(safe_response)
-            sent = await message.answer(f"💬 {display_response}\n\n<i>{persona_display}</i>", parse_mode="HTML")
-            _cache_original(sent.message_id, chat_response)
-            _cache_display(sent.message_id, display_response)
-            _cache_persona_display(sent.message_id, persona_display)
-            await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
+            # Мультибабл: последовательная отправка с typing-задержками
+            # Translate только под последним сообщением
+            for i, bubble in enumerate(pf_bubbles):
+                is_last = (i == len(pf_bubbles) - 1)
+                delay = _penfriend_typing_delay(bubble)
+                await message.bot.send_chat_action(user_id, "typing")
+                await asyncio.sleep(delay)
+                safe_bubble = html.escape(bubble)
+                display_bubble = _md_bold_to_html(safe_bubble)
+                if is_last:
+                    sent = await message.answer(
+                        f"💬 {display_bubble}\n\n<i>{persona_display}</i>",
+                        parse_mode="HTML"
+                    )
+                    _cache_original(sent.message_id, bubble)
+                    _cache_display(sent.message_id, display_bubble)
+                    _cache_persona_display(sent.message_id, persona_display)
+                    await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
+                else:
+                    await message.answer(f"💬 {display_bubble}", parse_mode="HTML")
         else:
             voice_bytes = await groq_client.text_to_speech(chat_response, voice=voice)
             if voice_bytes:
@@ -534,6 +600,13 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
         # Юзер вернулся — сбрасываем счётчик re-engagement фоново
         if user.get("reengagement_count", 0):
             asyncio.create_task(db.reset_reengagement(user_id))
+
+        # Автооценка уровня каждые 10 сообщений — fire-and-forget
+        msg_count = await db.get_user_message_count(user_id)
+        if msg_count > 0 and msg_count % 10 == 0:
+            asyncio.create_task(
+                _run_level_assessment(user_id, user_level, message)
+            )
 
         # Параллельно: история + саммари + прощание
         farewell_task = asyncio.create_task(groq_client.detect_farewell(user_text))
