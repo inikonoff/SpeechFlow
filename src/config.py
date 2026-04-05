@@ -8,7 +8,6 @@ from aiogram.types import Message, CallbackQuery
 from src.bot.handlers.states import OnboardingState
 from src.bot.keyboards import get_mode_keyboard
 from src.config import (
-    ADMIN_IDS,
     ONBOARDING_VOICE_START,
     ONBOARDING_VOICE_BEGINNER,
     ONBOARDING_VOICE_INTERMEDIATE,
@@ -158,7 +157,7 @@ async def onboarding_first_message(message: Message, state: FSMContext):
 # 4. Скопировать voice file_id в config.py в нужную константу ONBOARDING_VOICE_*
 # 5. Закомментировать обратно и задеплоить
 #
-# @router.message(F.voice, lambda m: m.from_user.id in ADMIN_IDS)
+# @router.message(F.voice, lambda m: m.from_user.id in __import__('src.config', fromlist=['ADMIN_IDS']).ADMIN_IDS)
 # async def get_voice_file_id(message: Message):
 #     file_id = message.voice.file_id
 #     duration = message.voice.duration
@@ -172,7 +171,7 @@ async def onboarding_first_message(message: Message, state: FSMContext):
 # @router.message(
 #     F.document,
 #     F.document.file_name.func(lambda name: name and name.endswith((".wav", ".ogg", ".mp3"))),
-#     lambda m: m.from_user.id in ADMIN_IDS
+#     lambda m: m.from_user.id in __import__('src.config', fromlist=['ADMIN_IDS']).ADMIN_IDS
 # )
 # async def get_document_file_id(message: Message):
 #     file_id = message.document.file_id
