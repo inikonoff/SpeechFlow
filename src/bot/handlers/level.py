@@ -16,12 +16,6 @@ from aiogram.types import CallbackQuery, BufferedInputFile
 
 from src.bot.handlers.states import LevelChangeState
 from src.bot.keyboards import get_settings_keyboard, get_level_select_keyboard, get_main_menu_keyboard
-from src.config import (
-    ONBOARDING_VOICE_BEGINNER,
-    ONBOARDING_VOICE_INTERMEDIATE,
-    ONBOARDING_VOICE_ADVANCED,
-    ONBOARDING_SPOILERS,
-)
 from src.services.supabase_db import db
 from src.services.groq_client import groq_client
 from src.personas import get_persona_voice
@@ -54,14 +48,6 @@ def get_change_level_keyboard():
     builder.row(InlineKeyboardButton(text="← Back", callback_data="settings"))
     return builder.as_markup()
 
-# ─── Хелпер: спойлер под голосовым ───────────────────────────────────────────
-
-def _make_spoiler(key: str) -> str:
-    data = ONBOARDING_SPOILERS.get(key, {})
-    en = html.escape(data.get("en", ""))
-    ru = html.escape(data.get("ru", ""))
-    return f"<blockquote expandable>{en}\n\n{ru}</blockquote>"
-
 # ─── /level команда ──────────────────────────────────────────────────────────
 
 @router.message(Command("level"))
@@ -69,6 +55,7 @@ async def cmd_level(message, state: FSMContext):
     """Команда /level — показывает выбор уровня прямо в чате."""
     try:
         from aiogram.types import Message
+        await state.clear()
         user = await db.get_or_create_user(message.from_user.id)
         current_level = user.get("level", "")
         await message.answer(
@@ -168,24 +155,7 @@ async def _handle_upgrade(callback: CallbackQuery, old_level: str, new_level: st
                 parse_mode="HTML"
             )
 
-        # Голосовое онбординга для нового уровня (захардкоженное)
-        voice_map = {
-            "beginner":     (ONBOARDING_VOICE_BEGINNER,     "beginner"),
-            "intermediate": (ONBOARDING_VOICE_INTERMEDIATE, "intermediate"),
-            "advanced":     (ONBOARDING_VOICE_ADVANCED,     "advanced"),
-        }
-        logger.info(f"Voice map lookup: new_level={new_level!r}, available keys={list(voice_map.keys())}")
-        file_id, spoiler_key = voice_map.get(new_level, (ONBOARDING_VOICE_INTERMEDIATE, "intermediate"))
-        logger.info(f"Selected file_id={file_id!r}, spoiler_key={spoiler_key!r}")
-
-        if file_id:
-            await callback.message.answer_voice(file_id)
-        else:
-            logger.warning(f"Onboarding voice file_id for '{spoiler_key}' is empty")
-
-        await callback.message.answer(_make_spoiler(spoiler_key), parse_mode="HTML")
-
-        # Возвращаем в Settings
+        # Возвращаем в меню
         user = await db.get_or_create_user(callback.from_user.id)
         await _back_to_settings(callback, user)
 
