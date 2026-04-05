@@ -173,7 +173,7 @@ async def onboarding_first_message(message: Message, state: FSMContext):
      F.document,
      F.document.file_name.func(lambda name: name and name.endswith((".wav", ".ogg", ".mp3"))),
      lambda m: m.from_user.id in ADMIN_IDS
- )
+     )
  async def get_document_file_id(message: Message):
      file_id = message.document.file_id
      file_name = message.document.file_name or "unknown"
