@@ -116,7 +116,9 @@ async def cq_set_level(callback: CallbackQuery, state: FSMContext):
         user_id = callback.from_user.id
 
         user = await db.get_or_create_user(user_id)
+        # Сохраняем old_level сразу — до state.clear() и любых других операций с БД
         old_level = user.get("level", "intermediate")
+        logger.info(f"Level change: old_level={old_level!r}, new_level={new_level!r}")
 
         old_rank = _level_rank(old_level)
         new_rank = _level_rank(new_level)
