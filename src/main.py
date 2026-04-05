@@ -58,10 +58,11 @@ request_stats: Dict[str, int] = {
 async def setup_bot_commands(bot: Bot):
     """Установка системного меню слева от поля ввода"""
     bot_commands = [
-        BotCommand(command="/start",    description="Restart / Change Level"),
+        BotCommand(command="/start",    description="Restart"),
+        BotCommand(command="/level",    description="Change Level"),
         BotCommand(command="/stats",    description="My Stats"),
         BotCommand(command="/settings", description="Settings"),
-        BotCommand(command="/author",   description="Author"),
+        BotCommand(command="/support",  description="Support & Feedback"),
     ]
     await bot.set_my_commands(bot_commands)
     logger.info("✅ Bot commands menu installed")
@@ -144,6 +145,7 @@ async def lifespan(app: FastAPI):
     dp.update.middleware(UserMiddleware())
     
     dp.include_router(start.router)
+    dp.include_router(level.router)
     dp.include_router(menu.router)
     dp.include_router(message.router)
     dp.include_router(level.router)
