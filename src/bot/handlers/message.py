@@ -45,6 +45,7 @@ BUTTON_TEXTS = {
 }
 
 _persona_display_cache: Dict[int, str] = {}
+_bubble_group_cache: Dict[int, List[int]] = {}  # last_msg_id → [prev_msg_ids] для удаления при переводе
 
 def _cache_original(msg_id: int, text: str):
     if len(_originals_cache) > 5000:
@@ -65,6 +66,11 @@ def _cache_persona_display(msg_id: int, persona_display: str):
     if len(_persona_display_cache) > 5000:
         _persona_display_cache.clear()
     _persona_display_cache[msg_id] = persona_display
+
+def _cache_bubble_group(last_msg_id: int, prev_msg_ids: List[int]):
+    if len(_bubble_group_cache) > 1000:
+        _bubble_group_cache.clear()
+    _bubble_group_cache[last_msg_id] = prev_msg_ids
 
 def _md_bold_to_html(text: str) -> str:
     """Конвертирует **bold** markdown в <b>bold</b> HTML для Telegram."""
@@ -507,6 +513,8 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
                 _md_bold_to_html(html.escape(b)) for b in pf_bubbles
             )
 
+            prev_msg_ids: List[int] = []
+
             for i, bubble in enumerate(pf_bubbles):
                 is_last = (i == len(pf_bubbles) - 1)
                 delay = _penfriend_typing_delay(bubble)
@@ -523,9 +531,13 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
                     _cache_original(sent.message_id, all_bubbles_raw)
                     _cache_display(sent.message_id, all_bubbles_display)
                     _cache_persona_display(sent.message_id, persona_display)
+                    # Запоминаем предыдущие баблы для удаления при переводе
+                    if prev_msg_ids:
+                        _cache_bubble_group(sent.message_id, prev_msg_ids)
                     await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
                 else:
-                    await message.answer(f"💬 {display_bubble}", parse_mode="HTML")
+                    sent_prev = await message.answer(f"💬 {display_bubble}", parse_mode="HTML")
+                    prev_msg_ids.append(sent_prev.message_id)
         else:
             voice_bytes = await groq_client.text_to_speech(chat_response, voice=voice)
             if voice_bytes:
@@ -665,7 +677,9 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
             raw_corrected.strip().lower() != user_text.strip().lower()
         )
 
-        if has_real_error:
+        # Карточка ошибки только в Tutor Mode — в PenFriend коррекция через recasting
+        user_mode = user.get("mode", MODE_TUTOR)
+        if has_real_error and user_mode != MODE_PENFRIEND:
             safe_original = html.escape(user_text)
             safe_corrected = html.escape(raw_corrected)
             safe_explanation = html.escape(raw_explanation) if raw_explanation else ""
@@ -767,6 +781,15 @@ async def handle_translate(callback: CallbackQuery):
 
         persona_disp = _persona_display_cache.get(message_id, "")
         translation_body = f"🌐 {safe_translation}\n\n<i>{html.escape(persona_disp)}</i>" if persona_disp else f"🌐 {safe_translation}"
+
+        # Удаляем предыдущие баблы этого ответа (если мультибабл)
+        prev_ids = _bubble_group_cache.get(message_id, [])
+        for prev_id in prev_ids:
+            try:
+                await callback.message.bot.delete_message(callback.message.chat.id, prev_id)
+            except Exception:
+                pass  # уже удалено или недоступно
+
         await safe_edit_text(
             callback.message,
             translation_body,
