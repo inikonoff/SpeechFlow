@@ -150,38 +150,41 @@ async def onboarding_first_message(message: Message, state: FSMContext):
 
 
 # ─── Хендлеры для получения file_id голосовых онбординга ─────────────────────
-# РАСКОММЕНТИРОВАТЬ если нужно перезаписать голосовые в config.py:
-#
-# 1. Раскомментировать оба хендлера ниже
-# 2. Задеплоить
-# 3. Отправить боту WAV через "Send as voice message" в Telegram Desktop
-# 4. Скопировать voice file_id в config.py в нужную константу ONBOARDING_VOICE_*
-# 5. Закомментировать обратно и задеплоить
-#
-# @router.message(F.voice, lambda m: m.from_user.id in ADMIN_IDS)
-# async def get_voice_file_id(message: Message):
-#     file_id = message.voice.file_id
-#     duration = message.voice.duration
-#     await message.answer(
-#         f"🎤 <b>Voice file_id</b> ({duration}s):\n\n"
-#         f"<code>{file_id}</code>\n\n"
-#         f"Вставь в нужную константу ONBOARDING_VOICE_* в config.py",
-#         parse_mode="HTML"
-#     )
-# 
-# @router.message(
-#     F.document,
-#     F.document.file_name.func(lambda name: name and name.endswith((".wav", ".ogg", ".mp3"))),
-#     lambda m: m.from_user.id in ADMIN_IDS
-# )
-# async def get_document_file_id(message: Message):
-#     file_id = message.document.file_id
-#     file_name = message.document.file_name or "unknown"
-#     await message.answer(
-#         f"📎 <b>{html.escape(file_name)}</b>\n\n"
-#         f"<code>{file_id}</code>\n\n"
-#         f"⚠️ Это document file_id — для голосовых онбординга нужен voice file_id.\n"
-#         f"Отправь файл как голосовое сообщение (Send as voice message).",
-#         parse_mode="HTML"
-#     )
-# 
+# Закомментировать после заполнения ONBOARDING_VOICE_* в config.py.
+
+@router.message(F.voice, lambda m: m.from_user.id in ADMIN_IDS)
+async def get_voice_file_id(message: Message):
+    """
+    Отправь боту голосовое сообщение (OGG/WAV) —
+    получишь voice file_id для вставки в ONBOARDING_VOICE_*.
+    """
+    file_id = message.voice.file_id
+    duration = message.voice.duration
+    await message.answer(
+        f"🎤 <b>Voice file_id</b> ({duration}s):\n\n"
+        f"<code>{file_id}</code>\n\n"
+        f"Вставь в нужную константу ONBOARDING_VOICE_* в config.py",
+        parse_mode="HTML"
+    )
+
+
+@router.message(
+    F.document,
+    F.document.file_name.func(lambda name: name and name.endswith((".wav", ".ogg", ".mp3"))),
+    lambda m: m.from_user.id in ADMIN_IDS
+)
+async def get_document_file_id(message: Message):
+    """
+    Документ с расширением wav/ogg/mp3 — возвращает document file_id.
+    Используй хендлер выше (голосовое сообщение) для онбординга.
+    """
+    file_id = message.document.file_id
+    file_name = message.document.file_name or "unknown"
+    await message.answer(
+        f"📎 <b>{html.escape(file_name)}</b>\n\n"
+        f"<code>{file_id}</code>\n\n"
+        f"⚠️ Это document file_id — для голосовых онбординга нужен voice file_id.\n"
+        f"Отправь файл как голосовое сообщение.",
+        parse_mode="HTML"
+        )
+    
