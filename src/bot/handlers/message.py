@@ -45,7 +45,7 @@ BUTTON_TEXTS = {
 }
 
 _persona_display_cache: Dict[int, str] = {}
-_bubble_group_cache: Dict[int, List[int]] = {}  # last_msg_id → [prev_msg_ids] для удаления при переводе
+_bubble_group_cache: Dict[int, list] = {}  # last_msg_id → [prev_msg_ids] для удаления при переводе
 
 def _cache_original(msg_id: int, text: str):
     if len(_originals_cache) > 5000:
@@ -513,7 +513,7 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
                 _md_bold_to_html(html.escape(b)) for b in pf_bubbles
             )
 
-            prev_msg_ids: List[int] = []
+            prev_msg_ids: list = []
 
             for i, bubble in enumerate(pf_bubbles):
                 is_last = (i == len(pf_bubbles) - 1)
