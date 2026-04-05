@@ -184,4 +184,4 @@ async def onboarding_first_message(message: Message, state: FSMContext):
 #         f"Отправь файл как голосовое сообщение (Send as voice message).",
 #         parse_mode="HTML"
 #     )
-# 
+#
