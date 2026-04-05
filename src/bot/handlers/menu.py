@@ -82,14 +82,19 @@ async def cmd_settings(message: Message):
         reply_markup=get_settings_keyboard(notif, recasting, practice, message.from_user.id)
     )
 
-@router.message(Command("author"))
-async def cmd_author(message: Message):
+@router.message(Command("support"))
+async def cmd_support(message: Message):
     await message.answer(
-        "👨‍💻 <b>SpeechFlow Pro</b>\n\n"
-        "Created by: @inikonoff\n"
-        "Feedback and suggestions are welcome!",
+        "👨‍💻 <b>Speech Flow Pro</b>\n\n"
+        "Created by: @inikonoff\n\n"
+        "Questions, feedback, or bug reports — write directly to @inikonoff.",
         parse_mode="HTML"
     )
+
+@router.message(Command("author"))
+async def cmd_author(message: Message):
+    """Алиас для обратной совместимости."""
+    await cmd_support(message)
 
 # ─── Stats cache ────────────────────────────────────────────────────────────
 
@@ -281,13 +286,11 @@ async def cq_toggle_mistakes_practice(callback: CallbackQuery):
 @router.callback_query(F.data == "back_to_menu")
 async def back_to_menu(callback: CallbackQuery):
     try:
-        user = await db.get_or_create_user(callback.from_user.id)
-        level = user.get("level", "")
         await safe_edit_text(
             callback.message,
             "🏠 <b>Main Menu</b>",
             parse_mode="HTML",
-            reply_markup=get_main_menu_keyboard(callback.from_user.id, level)
+            reply_markup=get_main_menu_keyboard(callback.from_user.id)
         )
         await callback.answer()
     except Exception as e:
@@ -477,12 +480,10 @@ async def handle_broadcast_message(message: Message, state: FSMContext):
         return
     if message.text and message.text.strip() == "/cancel":
         await state.clear()
-        user = await db.get_or_create_user(message.from_user.id)
-        level = user.get("level", "")
         await message.answer(
             "🏠 <b>Main Menu</b>",
             parse_mode="HTML",
-            reply_markup=get_main_menu_keyboard(message.from_user.id, level)
+            reply_markup=get_main_menu_keyboard(message.from_user.id)
         )
         return
 
