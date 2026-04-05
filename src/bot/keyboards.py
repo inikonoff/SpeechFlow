@@ -27,10 +27,12 @@ def get_persona_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def get_main_menu_keyboard(user_id: int = 0) -> InlineKeyboardMarkup:
+def get_main_menu_keyboard(user_id: int = 0, level: str = "") -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="📖 How to use", callback_data="how_to_use"))
     builder.row(InlineKeyboardButton(text="📊 My Stats",   callback_data="my_stats"))
+    level_label = f"📚 My Level: {level.capitalize()}" if level else "📚 Change Level"
+    builder.row(InlineKeyboardButton(text=level_label, callback_data="change_level"))
     builder.row(InlineKeyboardButton(text="⚙️ Settings",   callback_data="settings"))
     if user_id in ADMIN_IDS:
         builder.row(InlineKeyboardButton(text="🔧 Админ-панель", callback_data="admin_panel"))
@@ -91,9 +93,25 @@ def get_settings_keyboard(notifications_enabled: bool, recasting_enabled: bool, 
     builder.row(InlineKeyboardButton(text=notif_text,    callback_data="toggle_notifications"))
     builder.row(InlineKeyboardButton(text=recast_text,   callback_data="toggle_recasting"))
     builder.row(InlineKeyboardButton(text=practice_text, callback_data="toggle_mistakes_practice"))
-    builder.row(InlineKeyboardButton(text="📊 Change Level", callback_data="change_level"))
     if user_id in ADMIN_IDS:
         builder.row(InlineKeyboardButton(text="🔧 Админ-панель", callback_data="admin_panel"))
+    builder.row(InlineKeyboardButton(text="← Back", callback_data="back_to_menu"))
+    return builder.as_markup()
+
+
+def get_level_select_keyboard(current_level: str = "") -> InlineKeyboardMarkup:
+    """Выбор уровня из главного меню — Back возвращает в главное меню, не в Settings."""
+    def label(lvl: str, text: str) -> str:
+        return f"✓ {text}" if lvl == current_level else text
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text=label("beginner", "Beginner"),       callback_data="setlevel_beginner"),
+        InlineKeyboardButton(text=label("elementary", "Elementary"),   callback_data="setlevel_elementary"),
+    )
+    builder.row(
+        InlineKeyboardButton(text=label("intermediate", "Intermediate"), callback_data="setlevel_intermediate"),
+        InlineKeyboardButton(text=label("advanced", "Advanced"),         callback_data="setlevel_advanced"),
+    )
     builder.row(InlineKeyboardButton(text="← Back", callback_data="back_to_menu"))
     return builder.as_markup()
 
