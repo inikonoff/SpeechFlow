@@ -68,7 +68,7 @@ def get_daily_voice_limit(subscription_plan: str) -> int:
 
 ONBOARDING_VOICE_START        = "AwACAgIAAxkBAAIL_WnRYDDM5b9rybHu-_As7OJ_dgz5AAI1mwACvTiISiGuN-HDFKe1OwQ"  # voice_start.wav
 ONBOARDING_VOICE_BEGINNER     = "AwACAgIAAxkBAAIL-2nRYBMO7MUfY3ebVI_KckDupstuAAIxmwACvTiISo0f4nsI0jY7OwQ"  # voice_beginner.wav
-ONBOARDING_VOICE_INTERMEDIATE = "AwACAgIAAxkBAAIL_2nRYEj1JsqaFUB76Uuojjk9uFIJAAI3mwACvTiIShEhsCJz-KXROwQ"  # voice_intermediate.wav
+ONBOARDING_VOICE_INTERMEDIATE = "AwACAgIAAxkBAAIM-2nSnniUg8POi9ihuMqvjrx6TiTxAAJXmQACYQaRSu7w5QY8r0SqOwQ"  # voice_intermediate.wav
 ONBOARDING_VOICE_ADVANCED     = "AwACAgIAAxkBAAIMtGnSjwFKOQ8VUhsp_1CQg3pEKTspAAKUmAACYQaRSqFN1hJfjX_UOwQ"  # voice_advanced.wav
 
 # Тексты для спойлеров под каждым голосовым (оригинал + перевод)
