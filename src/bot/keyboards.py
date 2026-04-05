@@ -8,9 +8,6 @@ def get_level_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text="Beginner",     callback_data="level_beginner"),
-        InlineKeyboardButton(text="Elementary",   callback_data="level_elementary"),
-    )
-    builder.row(
         InlineKeyboardButton(text="Intermediate", callback_data="level_intermediate"),
         InlineKeyboardButton(text="Advanced",     callback_data="level_advanced"),
     )
@@ -105,10 +102,7 @@ def get_level_select_keyboard(current_level: str = "") -> InlineKeyboardMarkup:
         return f"✓ {text}" if lvl == current_level else text
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text=label("beginner", "Beginner"),       callback_data="setlevel_beginner"),
-        InlineKeyboardButton(text=label("elementary", "Elementary"),   callback_data="setlevel_elementary"),
-    )
-    builder.row(
+        InlineKeyboardButton(text=label("beginner", "Beginner"),         callback_data="setlevel_beginner"),
         InlineKeyboardButton(text=label("intermediate", "Intermediate"), callback_data="setlevel_intermediate"),
         InlineKeyboardButton(text=label("advanced", "Advanced"),         callback_data="setlevel_advanced"),
     )
