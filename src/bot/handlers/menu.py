@@ -281,11 +281,13 @@ async def cq_toggle_mistakes_practice(callback: CallbackQuery):
 @router.callback_query(F.data == "back_to_menu")
 async def back_to_menu(callback: CallbackQuery):
     try:
+        user = await db.get_or_create_user(callback.from_user.id)
+        level = user.get("level", "")
         await safe_edit_text(
             callback.message,
             "🏠 <b>Main Menu</b>",
             parse_mode="HTML",
-            reply_markup=get_main_menu_keyboard(callback.from_user.id)
+            reply_markup=get_main_menu_keyboard(callback.from_user.id, level)
         )
         await callback.answer()
     except Exception as e:
@@ -475,10 +477,12 @@ async def handle_broadcast_message(message: Message, state: FSMContext):
         return
     if message.text and message.text.strip() == "/cancel":
         await state.clear()
+        user = await db.get_or_create_user(message.from_user.id)
+        level = user.get("level", "")
         await message.answer(
             "🏠 <b>Main Menu</b>",
             parse_mode="HTML",
-            reply_markup=get_main_menu_keyboard(message.from_user.id)
+            reply_markup=get_main_menu_keyboard(message.from_user.id, level)
         )
         return
 

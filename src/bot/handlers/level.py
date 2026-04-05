@@ -14,7 +14,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, BufferedInputFile
 
 from src.bot.handlers.states import LevelChangeState
-from src.bot.keyboards import get_settings_keyboard
+from src.bot.keyboards import get_settings_keyboard, get_level_select_keyboard, get_main_menu_keyboard
 from src.config import (
     ONBOARDING_VOICE_BEGINNER,
     ONBOARDING_VOICE_INTERMEDIATE,
@@ -68,13 +68,15 @@ def _make_spoiler(key: str) -> str:
 
 @router.callback_query(F.data == "change_level")
 async def cq_change_level(callback: CallbackQuery, state: FSMContext):
-    """Кнопка 'Change Level' в Settings → показываем выбор уровня."""
+    """Кнопка 'Change Level' в главном меню → показываем выбор уровня с текущим уровнем."""
     try:
+        user = await db.get_or_create_user(callback.from_user.id)
+        current_level = user.get("level", "")
         await safe_edit_text(
             callback.message,
             "📚 <b>Change your English level</b>\n\nChoose the level that feels right:",
             parse_mode="HTML",
-            reply_markup=get_change_level_keyboard()
+            reply_markup=get_level_select_keyboard(current_level)
         )
         await state.set_state(LevelChangeState.choosing_level)
         await callback.answer()
@@ -88,7 +90,9 @@ async def cq_change_level(callback: CallbackQuery, state: FSMContext):
 async def cq_set_level(callback: CallbackQuery, state: FSMContext):
     """Пользователь выбрал новый уровень."""
     try:
-        new_level = callback.data.split("_")[1]  # setlevel_intermediate → intermediate
+        parts = callback.data.split("_")  # setlevel_intermediate → ["setlevel", "intermediate"]
+        new_level = "_".join(parts[1:])  # на случай если уровень содержит _ (не содержит, но надёжнее)
+        logger.info(f"Level change requested: callback_data={callback.data!r}, new_level={new_level!r}")
         user_id = callback.from_user.id
 
         user = await db.get_or_create_user(user_id)
@@ -151,7 +155,9 @@ async def _handle_upgrade(callback: CallbackQuery, old_level: str, new_level: st
             "intermediate": (ONBOARDING_VOICE_INTERMEDIATE, "intermediate"),
             "advanced":     (ONBOARDING_VOICE_ADVANCED,     "advanced"),
         }
+        logger.info(f"Voice map lookup: new_level={new_level!r}, available keys={list(voice_map.keys())}")
         file_id, spoiler_key = voice_map.get(new_level, (ONBOARDING_VOICE_INTERMEDIATE, "intermediate"))
+        logger.info(f"Selected file_id={file_id!r}, spoiler_key={spoiler_key!r}")
 
         if file_id:
             await callback.message.answer_voice(file_id)
@@ -191,11 +197,10 @@ async def _handle_downgrade(callback: CallbackQuery, old_level: str, new_level: 
 # ─── Хелпер: вернуться в Settings ────────────────────────────────────────────
 
 async def _back_to_settings(callback: CallbackQuery, user: dict):
-    notif     = user.get("notifications_enabled", True)
-    recasting = user.get("recasting_enabled", False)
-    practice  = user.get("mistakes_practice_enabled", False)
+    """После смены уровня возвращаем в главное меню с обновлённым уровнем."""
+    level = user.get("level", "")
     await callback.message.answer(
-        "⚙️ <b>Settings</b>",
+        "🏠 <b>Main Menu</b>",
         parse_mode="HTML",
-        reply_markup=get_settings_keyboard(notif, recasting, practice, callback.from_user.id)
+        reply_markup=get_main_menu_keyboard(callback.from_user.id, level)
     )
