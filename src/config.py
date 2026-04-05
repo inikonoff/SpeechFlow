@@ -1,136 +1,187 @@
-from pydantic_settings import BaseSettings
-from typing import List, Optional
-import os
+import logging
+import html
+from aiogram import Router, F
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.types import Message, CallbackQuery
+
+from src.bot.handlers.states import OnboardingState
+from src.bot.keyboards import get_mode_keyboard
+from src.config import (
+    ADMIN_IDS,
+    ONBOARDING_VOICE_START,
+    ONBOARDING_VOICE_BEGINNER,
+    ONBOARDING_VOICE_INTERMEDIATE,
+    ONBOARDING_VOICE_ADVANCED,
+    ONBOARDING_SPOILERS,
+)
+from src.services.supabase_db import db
+
+router = Router()
+logger = logging.getLogger(__name__)
+
+# ─── Клавиатура уровней для онбординга (без кнопки Back) ──────────────────────
+
+def get_onboarding_level_keyboard():
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    from aiogram.types import InlineKeyboardButton
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="Beginner",     callback_data="onb_level_beginner"),
+        InlineKeyboardButton(text="Intermediate", callback_data="onb_level_intermediate"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="Advanced",     callback_data="onb_level_advanced"),
+    )
+    return builder.as_markup()
+
+# ─── Хелпер: спойлер под голосовым ────────────────────────────────────────────
+
+def _make_spoiler(key: str) -> str:
+    data = ONBOARDING_SPOILERS.get(key, {})
+    en = html.escape(data.get("en", ""))
+    ru = html.escape(data.get("ru", ""))
+    return f"<blockquote expandable>{en}\n\n{ru}</blockquote>"
+
+# ─── Хелпер: отправить голосовое онбординга ───────────────────────────────────
+
+async def _send_onboarding_voice(message: Message, file_id: str, spoiler_key: str):
+    """Отправляет голосовое по file_id + спойлер с текстом и переводом."""
+    if file_id:
+        await message.answer_voice(file_id)
+    else:
+        logger.warning(f"Onboarding voice file_id for '{spoiler_key}' is empty")
+    await message.answer(_make_spoiler(spoiler_key), parse_mode="HTML")
+
+# ─── /start ───────────────────────────────────────────────────────────────────
+
+@router.message(Command("start"))
+async def cmd_start(message: Message, state: FSMContext):
+    try:
+        await state.clear()
+        user = await db.get_or_create_user(
+            telegram_id=message.from_user.id,
+            username=message.from_user.username
+        )
+
+        # Новый пользователь → онбординг
+        if not user.get("onboarding_completed", False):
+            await _start_onboarding(message, state)
+            return
+
+        # Существующий пользователь → сброс состояния + меню
+        await message.answer(
+            "Welcome back! Choose your mode:",
+            reply_markup=get_mode_keyboard()
+        )
+
+    except Exception as e:
+        logger.error(f"Error in /start: {e}")
+        await message.answer("An error occurred. Please try again.")
+
+async def _start_onboarding(message: Message, state: FSMContext):
+    """Шаг 1 онбординга: голосовое приветствие + выбор уровня."""
+    await _send_onboarding_voice(message, ONBOARDING_VOICE_START, "start")
+    await message.answer(
+        "Choose your level:",
+        reply_markup=get_onboarding_level_keyboard()
+    )
+    await state.set_state(OnboardingState.waiting_level)
+
+# ─── Онбординг: выбор уровня ──────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("onb_level_"), OnboardingState.waiting_level)
+async def onboarding_level_selected(callback: CallbackQuery, state: FSMContext):
+    try:
+        level = callback.data.split("_")[2]  # onb_level_beginner → beginner
+        user_id = callback.from_user.id
+
+        await db.update_user_level(user_id, level)
+        await callback.message.edit_reply_markup(reply_markup=None)
+
+        voice_map = {
+            "beginner":     (ONBOARDING_VOICE_BEGINNER,     "beginner"),
+            "intermediate": (ONBOARDING_VOICE_INTERMEDIATE, "intermediate"),
+            "advanced":     (ONBOARDING_VOICE_ADVANCED,     "advanced"),
+        }
+        file_id, spoiler_key = voice_map.get(level, (ONBOARDING_VOICE_INTERMEDIATE, "intermediate"))
+        await _send_onboarding_voice(callback.message, file_id, spoiler_key)
+
+        await state.set_state(OnboardingState.waiting_first_message)
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Error in onboarding level selection: {e}")
+        await callback.answer("An error occurred.", show_alert=True)
+
+# ─── Онбординг: первое сообщение пользователя ────────────────────────────────
+
+@router.message(OnboardingState.waiting_first_message)
+async def onboarding_first_message(message: Message, state: FSMContext):
+    """
+    Любое сообщение в этом состоянии = пользователь начал говорить.
+    Завершаем онбординг, переводим в Tutor Mode (Mrs. Smith по умолчанию).
+    """
+    try:
+        user_id = message.from_user.id
+        await db.complete_onboarding(user_id)
+        await state.clear()
+
+        from src.modes import MODE_TUTOR
+        from src.personas import get_persona_voice
+        await db.update_mode(user_id, MODE_TUTOR)
+        await db.update_user_persona(user_id, "mrs_smith")
+        await db.update_user_voice(user_id, get_persona_voice("mrs_smith"))
+
+        await message.answer(
+            "🎓 <b>Tutor Mode</b> — 📚 Mrs. Smith is listening.\n\n"
+            "Send a voice or text message to begin.",
+            parse_mode="HTML",
+            reply_markup=get_mode_keyboard()
+        )
+
+        # Передаём первое сообщение сразу в основной хендлер
+        from src.bot.handlers.message import handle_message
+        await handle_message(message, state)
+
+    except Exception as e:
+        logger.error(f"Error in onboarding first message: {e}")
+        await message.answer("Something went wrong. Please try again.")
 
 
-class Settings(BaseSettings):
-    # Telegram
-    TELEGRAM_BOT_TOKEN: str
-
-    # Groq API Keys (строка с ключами через запятую)
-    GROQ_API_KEYS: str = ""
-
-    # Supabase
-    SUPABASE_URL: str
-    SUPABASE_KEY: str
-
-    # Bot settings
-    DEFAULT_USER_LEVEL: str = "intermediate"
-    FREE_MESSAGES_LIMIT: int = 0
-    VOICE_RESPONSE_MODE: str = "mirror"  # "always", "mirror", "never"
-    TTS_VOICE: str = "austin"
-    TEMP_DIR: str = "/tmp/speech_flow"
-    CONTEXT_WINDOW: int = 5
-
-    class Config:
-        env_file = ".env"
-        extra = "ignore"
-
-    @property
-    def groq_api_keys_list(self) -> List[str]:
-        if not self.GROQ_API_KEYS:
-            return []
-        return [k.strip() for k in self.GROQ_API_KEYS.split(",") if k.strip()]
-
-
-settings = Settings()
-
-
-def get_admin_ids() -> List[int]:
-    admin_ids_str = os.environ.get("ADMIN_IDS", "")
-    if not admin_ids_str:
-        return []
-    ids = []
-    for id_str in admin_ids_str.split(","):
-        id_str = id_str.strip()
-        if id_str and id_str.isdigit():
-            ids.append(int(id_str))
-    return ids
-
-
-ADMIN_IDS = get_admin_ids()
-
-SUBSCRIPTION_PLANS = ("standard", "plus", "pro")
-
-DAILY_VOICE_LIMITS: dict = {
-    "standard": 5,
-    "plus": 10,
-    "pro": 20,
-}
-
-def get_daily_voice_limit(subscription_plan: str) -> int:
-    return DAILY_VOICE_LIMITS.get(subscription_plan, DAILY_VOICE_LIMITS["standard"])
-
-
-# ─── Онбординг: file_id голосовых Mrs. Smith ──────────────────────────────────
-# Заполнить после загрузки WAV-файлов в Telegram через временный хендлер.
-# Инструкция: отправь боту файл как документ → хендлер ответит file_id.
-
-ONBOARDING_VOICE_START        = "AwACAgIAAxkBAAIL_WnRYDDM5b9rybHu-_As7OJ_dgz5AAI1mwACvTiISiGuN-HDFKe1OwQ"  # voice_start.wav
-ONBOARDING_VOICE_BEGINNER     = "AwACAgIAAxkBAAIL-2nRYBMO7MUfY3ebVI_KckDupstuAAIxmwACvTiISo0f4nsI0jY7OwQ"  # voice_beginner.wav
-ONBOARDING_VOICE_INTERMEDIATE = "AwACAgIAAxkBAAIM-2nSnniUg8POi9ihuMqvjrx6TiTxAAJXmQACYQaRSu7w5QY8r0SqOwQ"  # voice_intermediate.wav
-ONBOARDING_VOICE_ADVANCED     = "AwACAgIAAxkBAAIMtGnSjwFKOQ8VUhsp_1CQg3pEKTspAAKUmAACYQaRSqFN1hJfjX_UOwQ"  # voice_advanced.wav
-
-# Тексты для спойлеров под каждым голосовым (оригинал + перевод)
-ONBOARDING_SPOILERS = {
-    "start": {
-        "en": (
-            "Hello. I'm Mrs. Smith — and I'm very glad you're here. "
-            "This isn't a course, and I won't be giving you homework. "
-            "We're simply going to talk — in English, at your pace. "
-            "But first, tell me: how would you describe your English right now? "
-            "Choose the option that feels closest."
-        ),
-        "ru": (
-            "Привет. Я миссис Смит — и я очень рада, что вы здесь. "
-            "Это не курс, и я не буду давать домашние задания. "
-            "Мы просто будем разговаривать — по-английски, в вашем темпе. "
-            "Но сначала скажите: как бы вы описали свой английский прямо сейчас? "
-            "Выберите вариант, который кажется наиболее близким."
-        ),
-    },
-    "beginner": {
-        "en": (
-            "Beginner — that's an honest answer, and I appreciate that. "
-            "We'll keep things simple and comfortable. "
-            "The most important thing right now is that you speak. "
-            "Don't worry about mistakes — that's what I'm here for. "
-            "Go ahead, say hello. Tell me something small about your day."
-        ),
-        "ru": (
-            "Начинающий — это честный ответ, и я это ценю. "
-            "Мы будем держаться простых и комфортных тем. "
-            "Самое важное сейчас — чтобы вы говорили. "
-            "Не беспокойтесь об ошибках — для этого я здесь. "
-            "Давайте, поздоровайтесь. Расскажите что-нибудь небольшое о своём дне."
-        ),
-    },
-    "intermediate": {
-        "en": (
-            "Intermediate — good. You know more than you think you do. "
-            "What we're going to work on is getting that knowledge out of your head "
-            "and into your speech, naturally. "
-            "So let's start right now. Tell me — what's been on your mind lately?"
-        ),
-        "ru": (
-            "Средний уровень — хорошо. Вы знаете больше, чем думаете. "
-            "Мы будем работать над тем, чтобы эти знания выходили из головы "
-            "и становились живой речью — естественно. "
-            "Давайте начнём прямо сейчас. Скажите — о чём вы думали в последнее время?"
-        ),
-    },
-    "advanced": {
-        "en": (
-            "Advanced. Then we won't waste time on basics. "
-            "I'm curious about you — how you think, what you care about, "
-            "what you find difficult to express in English. "
-            "That's where the real work is. So — tell me something that matters to you."
-        ),
-        "ru": (
-            "Продвинутый. Тогда не будем тратить время на основы. "
-            "Мне интересны вы — как вы думаете, что вам важно, "
-            "что вам трудно выразить по-английски. "
-            "Вот где настоящая работа. Итак — расскажите мне о чём-то важном для вас."
-        ),
-    },
-}
+# ─── Хендлеры для получения file_id голосовых онбординга ─────────────────────
+# РАСКОММЕНТИРОВАТЬ если нужно перезаписать голосовые в config.py:
+#
+# 1. Раскомментировать оба хендлера ниже
+# 2. Задеплоить
+# 3. Отправить боту WAV через "Send as voice message" в Telegram Desktop
+# 4. Скопировать voice file_id в config.py в нужную константу ONBOARDING_VOICE_*
+# 5. Закомментировать обратно и задеплоить
+#
+# @router.message(F.voice, lambda m: m.from_user.id in ADMIN_IDS)
+# async def get_voice_file_id(message: Message):
+#     file_id = message.voice.file_id
+#     duration = message.voice.duration
+#     await message.answer(
+#         f"🎤 <b>Voice file_id</b> ({duration}s):\n\n"
+#         f"<code>{file_id}</code>\n\n"
+#         f"Вставь в нужную константу ONBOARDING_VOICE_* в config.py",
+#         parse_mode="HTML"
+#     )
+# 
+# @router.message(
+#     F.document,
+#     F.document.file_name.func(lambda name: name and name.endswith((".wav", ".ogg", ".mp3"))),
+#     lambda m: m.from_user.id in ADMIN_IDS
+# )
+# async def get_document_file_id(message: Message):
+#     file_id = message.document.file_id
+#     file_name = message.document.file_name or "unknown"
+#     await message.answer(
+#         f"📎 <b>{html.escape(file_name)}</b>\n\n"
+#         f"<code>{file_id}</code>\n\n"
+#         f"⚠️ Это document file_id — для голосовых онбординга нужен voice file_id.\n"
+#         f"Отправь файл как голосовое сообщение (Send as voice message).",
+#         parse_mode="HTML"
+#     )
+# 
