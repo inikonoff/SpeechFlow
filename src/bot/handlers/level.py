@@ -10,6 +10,7 @@ SpeechFlow Pro — Level Change Handler
 import logging
 import html
 from aiogram import Router, F
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, BufferedInputFile
 
@@ -63,6 +64,25 @@ def _make_spoiler(key: str) -> str:
     en = html.escape(data.get("en", ""))
     ru = html.escape(data.get("ru", ""))
     return f"<blockquote expandable>{en}\n\n{ru}</blockquote>"
+
+# ─── /level команда ──────────────────────────────────────────────────────────
+
+@router.message(Command("level"))
+async def cmd_level(message, state: FSMContext):
+    """Команда /level — показывает выбор уровня прямо в чате."""
+    try:
+        from aiogram.types import Message
+        user = await db.get_or_create_user(message.from_user.id)
+        current_level = user.get("level", "")
+        await message.answer(
+            "📚 <b>Change your English level</b>\n\nChoose the level that feels right:",
+            parse_mode="HTML",
+            reply_markup=get_level_select_keyboard(current_level)
+        )
+        await state.set_state(LevelChangeState.choosing_level)
+    except Exception as e:
+        logger.error(f"Error in /level: {e}")
+        await message.answer("Something went wrong. Please try again.")
 
 # ─── Триггер из Settings ──────────────────────────────────────────────────────
 
