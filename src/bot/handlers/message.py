@@ -67,7 +67,7 @@ def _cache_persona_display(msg_id: int, persona_display: str):
         _persona_display_cache.clear()
     _persona_display_cache[msg_id] = persona_display
 
-def _cache_bubble_group(last_msg_id: int, prev_msg_ids: List[int]):
+def _cache_bubble_group(last_msg_id: int, prev_msg_ids: list[int]):
     if len(_bubble_group_cache) > 1000:
         _bubble_group_cache.clear()
     _bubble_group_cache[last_msg_id] = prev_msg_ids
