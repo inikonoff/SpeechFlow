@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 # ─── Порядок уровней для определения повышение/понижение ──────────────────────
 
-LEVEL_ORDER = ["beginner", "elementary", "intermediate", "advanced"]
+LEVEL_ORDER = ["beginner", "intermediate", "advanced"]
 
 def _level_rank(level: str) -> int:
     try:
@@ -48,9 +48,6 @@ def get_change_level_keyboard():
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text="Beginner",     callback_data="setlevel_beginner"),
-        InlineKeyboardButton(text="Elementary",   callback_data="setlevel_elementary"),
-    )
-    builder.row(
         InlineKeyboardButton(text="Intermediate", callback_data="setlevel_intermediate"),
         InlineKeyboardButton(text="Advanced",     callback_data="setlevel_advanced"),
     )
