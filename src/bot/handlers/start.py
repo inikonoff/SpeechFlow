@@ -156,8 +156,14 @@ async def onboarding_mode_selected(callback: CallbackQuery, state: FSMContext):
             if voice_bytes:
                 voice_file = BufferedInputFile(voice_bytes, filename="greeting.wav")
                 await callback.message.answer_voice(voice_file, caption="📚 Mrs. Smith")
+                # Спойлер с транскрипцией
+                safe_greeting = html.escape(greeting)
+                await callback.message.answer(
+                    f"<blockquote expandable>📚 {safe_greeting}</blockquote>",
+                    parse_mode="HTML"
+                )
             else:
-                await callback.message.answer(f"📚 {greeting}")
+                await callback.message.answer(f"📚 {html.escape(greeting)}", parse_mode="HTML")
             await db.save_message(user_id, "assistant", greeting)
         elif mode_key == "penfriend":
             await db.update_mode(user_id, MODE_PENFRIEND)
