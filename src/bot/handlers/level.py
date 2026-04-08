@@ -16,6 +16,11 @@ from aiogram.types import CallbackQuery, BufferedInputFile
 
 from src.bot.handlers.states import LevelChangeState
 from src.bot.keyboards import get_level_select_keyboard
+from src.config import (
+    ONBOARDING_VOICE_BEGINNER,
+    ONBOARDING_VOICE_INTERMEDIATE,
+    ONBOARDING_VOICE_ADVANCED,
+)
 from src.services.supabase_db import db
 from src.services.groq_client import groq_client
 from src.personas import get_persona_voice
@@ -154,6 +159,16 @@ async def _handle_upgrade(callback: CallbackQuery, old_level: str, new_level: st
                 f"📚 <i>{html.escape(reaction_text)}</i>",
                 parse_mode="HTML"
             )
+
+        # Голосовое онбординга для нового уровня
+        voice_map = {
+            "beginner":     ONBOARDING_VOICE_BEGINNER,
+            "intermediate": ONBOARDING_VOICE_INTERMEDIATE,
+            "advanced":     ONBOARDING_VOICE_ADVANCED,
+        }
+        onb_file_id = voice_map.get(new_level)
+        if onb_file_id:
+            await callback.message.answer_voice(onb_file_id)
 
         # Возвращаем в меню
         user = await db.get_or_create_user(callback.from_user.id)
