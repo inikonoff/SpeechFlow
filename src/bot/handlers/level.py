@@ -10,12 +10,12 @@ SpeechFlow Pro — Level Change Handler
 import logging
 import html
 from aiogram import Router, F
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, BufferedInputFile
 
 from src.bot.handlers.states import LevelChangeState
-from src.bot.keyboards import get_settings_keyboard, get_level_select_keyboard, get_main_menu_keyboard
+from src.bot.keyboards import get_level_select_keyboard
 from src.services.supabase_db import db
 from src.services.groq_client import groq_client
 from src.personas import get_persona_voice
@@ -50,7 +50,7 @@ def get_change_level_keyboard():
 
 # ─── /level команда ──────────────────────────────────────────────────────────
 
-@router.message(Command("level"))
+@router.message(Command("level"), StateFilter("*"))
 async def cmd_level(message, state: FSMContext):
     """Команда /level — показывает выбор уровня прямо в чате."""
     try:
@@ -186,10 +186,5 @@ async def _handle_downgrade(callback: CallbackQuery, old_level: str, new_level: 
 # ─── Хелпер: вернуться в Settings ────────────────────────────────────────────
 
 async def _back_to_settings(callback: CallbackQuery, user: dict):
-    """После смены уровня возвращаем в главное меню с обновлённым уровнем."""
-    level = user.get("level", "")
-    await callback.message.answer(
-        "🏠 <b>Main Menu</b>",
-        parse_mode="HTML",
-        reply_markup=get_main_menu_keyboard(callback.from_user.id, level)
-    )
+    """Тихое подтверждение после смены уровня — без лишних меню."""
+    pass  # ничего не показываем — реакция Mrs. Smith уже была
