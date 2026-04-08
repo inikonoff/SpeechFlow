@@ -110,6 +110,20 @@ def get_level_select_keyboard(current_level: str = "") -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def get_onboarding_mode_keyboard(level: str = "") -> InlineKeyboardMarkup:
+    """Выбор режима в конце онбординга."""
+    hint = ""
+    if level == "beginner":
+        hint = " ★"  # рекомендация для beginner
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text=f"🎓 Tutor{hint}", callback_data="onb_mode_tutor"),
+        InlineKeyboardButton(text="✉️ PenFriend",    callback_data="onb_mode_penfriend"),
+        InlineKeyboardButton(text="🎙 Flow",         callback_data="onb_mode_flow"),
+    )
+    return builder.as_markup()
+
+
 def get_back_to_menu_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="← Back to Menu", callback_data="back_to_menu"))
