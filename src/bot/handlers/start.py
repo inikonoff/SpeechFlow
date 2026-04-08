@@ -6,7 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 
 from src.bot.handlers.states import OnboardingState
-from src.bot.keyboards import get_mode_keyboard
+from src.bot.keyboards import get_mode_keyboard, get_onboarding_mode_keyboard
 from src.config import (
     ADMIN_IDS,
     ONBOARDING_VOICE_START,
@@ -107,47 +107,64 @@ async def onboarding_level_selected(callback: CallbackQuery, state: FSMContext):
         file_id, spoiler_key = voice_map.get(level, (ONBOARDING_VOICE_INTERMEDIATE, "intermediate"))
         await _send_onboarding_voice(callback.message, file_id, spoiler_key)
 
-        await state.set_state(OnboardingState.waiting_first_message)
+        # Показываем выбор режима
+        hint = " Tutor is recommended for beginners." if level == "beginner" else ""
+        await callback.message.answer(
+            f"Ready to start?{(' ' + hint) if hint else ''}",
+            reply_markup=get_onboarding_mode_keyboard(level)
+        )
+        await state.update_data(onb_level=level)
+        await state.set_state(OnboardingState.choosing_mode)
         await callback.answer()
 
     except Exception as e:
         logger.error(f"Error in onboarding level selection: {e}")
         await callback.answer("An error occurred.", show_alert=True)
 
-# ─── Онбординг: первое сообщение пользователя ────────────────────────────────
+# ─── Онбординг: выбор режима ─────────────────────────────────────────────────
 
-@router.message(OnboardingState.waiting_first_message)
-async def onboarding_first_message(message: Message, state: FSMContext):
-    """
-    Любое сообщение в этом состоянии = пользователь начал говорить.
-    Завершаем онбординг, переводим в Tutor Mode (Mrs. Smith по умолчанию).
-    """
+@router.callback_query(F.data.startswith("onb_mode_"), OnboardingState.choosing_mode)
+async def onboarding_mode_selected(callback: CallbackQuery, state: FSMContext):
+    """Пользователь выбрал режим — завершаем онбординг и активируем режим."""
     try:
-        user_id = message.from_user.id
+        mode_key = callback.data.split("_")[2]  # onb_mode_tutor → tutor
+        user_id = callback.from_user.id
+
         await db.complete_onboarding(user_id)
-        await state.clear()
+        await callback.message.edit_reply_markup(reply_markup=None)
 
-        from src.modes import MODE_TUTOR
+        from src.modes import MODE_TUTOR, MODE_PENFRIEND, MODE_FLOW
         from src.personas import get_persona_voice
-        await db.update_mode(user_id, MODE_TUTOR)
-        await db.update_user_persona(user_id, "mrs_smith")
-        await db.update_user_voice(user_id, get_persona_voice("mrs_smith"))
 
-        await message.answer(
-            "📚 Mrs. Smith is your default guide — she listens, responds, "
-            "and quietly notes what to work on.\n\n"
-            "Switch to PenFriend or Flow anytime using the buttons below.",
-            parse_mode="HTML",
-            reply_markup=get_mode_keyboard()
-        )
+        if mode_key == "tutor":
+            await db.update_mode(user_id, MODE_TUTOR)
+            await db.update_user_persona(user_id, "mrs_smith")
+            await db.update_user_voice(user_id, get_persona_voice("mrs_smith"))
+            await callback.message.answer(
+                "📚 Mrs. Smith is your default guide — she listens, responds, "
+                "and quietly notes what to work on.\n\n"
+                "Switch to PenFriend or Flow anytime using the buttons below.",
+                reply_markup=get_mode_keyboard()
+            )
+        elif mode_key == "penfriend":
+            await db.update_mode(user_id, MODE_PENFRIEND)
+            await callback.message.answer(
+                "✉️ PenFriend Mode — choose who you want to write to:",
+                reply_markup=get_mode_keyboard()
+            )
+        elif mode_key == "flow":
+            await db.update_mode(user_id, MODE_FLOW)
+            await callback.message.answer(
+                "🎙 Flow Mode — choose who you want to talk to:",
+                reply_markup=get_mode_keyboard()
+            )
 
-        # Передаём первое сообщение сразу в основной хендлер
-        from src.bot.handlers.message import handle_message
-        await handle_message(message, state)
+        await state.clear()
+        await callback.answer()
 
     except Exception as e:
-        logger.error(f"Error in onboarding first message: {e}")
-        await message.answer("Something went wrong. Please try again.")
+        logger.error(f"Error in onboarding mode selection: {e}")
+        await callback.answer("Something went wrong.", show_alert=True)
 
 
 # ─── Хендлеры для получения file_id голосовых онбординга ─────────────────────
