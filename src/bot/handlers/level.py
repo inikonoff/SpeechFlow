@@ -20,6 +20,7 @@ from src.config import (
     ONBOARDING_VOICE_BEGINNER,
     ONBOARDING_VOICE_INTERMEDIATE,
     ONBOARDING_VOICE_ADVANCED,
+    ONBOARDING_SPOILERS,
 )
 from src.services.supabase_db import db
 from src.services.groq_client import groq_client
@@ -52,6 +53,16 @@ def get_change_level_keyboard():
     )
     builder.row(InlineKeyboardButton(text="← Back", callback_data="settings"))
     return builder.as_markup()
+
+# ─── Хелпер: спойлер под голосовым ───────────────────────────────────────────
+
+import html as _html
+
+def _make_spoiler(key: str) -> str:
+    data = ONBOARDING_SPOILERS.get(key, {})
+    en = _html.escape(data.get("en", ""))
+    ru = _html.escape(data.get("ru", ""))
+    return f"<blockquote expandable>{en}\n\n{ru}</blockquote>"
 
 # ─── /level команда ──────────────────────────────────────────────────────────
 
@@ -169,6 +180,9 @@ async def _handle_upgrade(callback: CallbackQuery, old_level: str, new_level: st
         onb_file_id = voice_map.get(new_level)
         if onb_file_id:
             await callback.message.answer_voice(onb_file_id)
+            spoiler = _make_spoiler(new_level)
+            if spoiler:
+                await callback.message.answer(spoiler, parse_mode="HTML")
 
         # Возвращаем в меню
         user = await db.get_or_create_user(callback.from_user.id)
