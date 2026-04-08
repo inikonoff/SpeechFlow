@@ -141,11 +141,24 @@ async def onboarding_mode_selected(callback: CallbackQuery, state: FSMContext):
             await db.update_user_persona(user_id, "mrs_smith")
             await db.update_user_voice(user_id, get_persona_voice("mrs_smith"))
             await callback.message.answer(
-                "📚 Mrs. Smith is your default guide — she listens, responds, "
-                "and quietly notes what to work on.\n\n"
-                "Switch to PenFriend or Flow anytime using the buttons below.",
+                "📚 Mrs. Smith is your guide. Switch to PenFriend or Flow anytime.",
                 reply_markup=get_mode_keyboard()
             )
+            # Приветствие Mrs. Smith голосом
+            from src.services.groq_client import groq_client
+            from aiogram.types import BufferedInputFile
+            user_data = await db.get_or_create_user(user_id)
+            user_level = user_data.get("level", "beginner")
+            greeting = await groq_client.generate_persona_greeting(
+                "mrs_smith", user_level, session_count=0
+            )
+            voice_bytes = await groq_client.text_to_speech(greeting, voice="diana")
+            if voice_bytes:
+                voice_file = BufferedInputFile(voice_bytes, filename="greeting.wav")
+                await callback.message.answer_voice(voice_file, caption="📚 Mrs. Smith")
+            else:
+                await callback.message.answer(f"📚 {greeting}")
+            await db.save_message(user_id, "assistant", greeting)
         elif mode_key == "penfriend":
             await db.update_mode(user_id, MODE_PENFRIEND)
             await callback.message.answer(
