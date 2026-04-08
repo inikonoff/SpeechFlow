@@ -20,8 +20,8 @@ class TutorState(StatesGroup):
 
 
 class OnboardingState(StatesGroup):
-    waiting_level = State()    # показали приветствие, ждём выбор уровня
-    waiting_first_message = State()  # показали реакцию на уровень, ждём первое сообщение
+    waiting_level = State()       # показали приветствие, ждём выбор уровня
+    choosing_mode = State()       # показали голосовое уровня, ждём выбор режима
 
 
 class LevelChangeState(StatesGroup):
