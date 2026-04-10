@@ -155,6 +155,8 @@ Your job: find the ONE most important language error worth correcting.
 - Wrong verb tenses (I go there yesterday)
 - Incorrect prepositions (I am on the intermediate level)
 - Wrong verb forms (I am look forward to see you)
+- Wrong noun forms (I bought two apple yesterday)
+- Wrong forms of adjectives (This the gooddest movie I have ever seen)
 - Glaring vocabulary misuse
 
 # LEVEL CONTEXT
