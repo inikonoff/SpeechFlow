@@ -1110,7 +1110,6 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
             'Example: {"messages": ["first message", "second message"]}\n'
             'Rules:\n'
             '- 2-3 items in the array\n'
-            '- Plain text only — NO markdown, NO bold, NO asterisks\n'
             '- EXCEPTION: **double asterisks** around recasted phrases are required when recasting\n'
             '- No code blocks, no preamble'
         )
