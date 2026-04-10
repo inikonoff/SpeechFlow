@@ -72,6 +72,32 @@ def _cache_bubble_group(last_msg_id: int, prev_msg_ids: list[int]):
         _bubble_group_cache.clear()
     _bubble_group_cache[last_msg_id] = prev_msg_ids
 
+_recast_cache: Dict[int, list] = {}  # msg_id → ["recast phrase 1", "recast phrase 2"]
+
+def _cache_recast(msg_id: int, phrases: list):
+    if len(_recast_cache) > 5000:
+        _recast_cache.clear()
+    _recast_cache[msg_id] = phrases
+
+def _extract_recast_phrases(text: str) -> list:
+    """Извлекает фразы обёрнутые в **bold** из текста LLM."""
+    import re as _re
+    return _re.findall(r'\*\*(.+?)\*\*', text)
+
+async def _preload_translation(msg_id: int, clean_text: str, recast_phrases: list) -> None:
+    """
+    Фоновая задача: переводит текст и кладёт в _translation_cache.
+    recast_phrases — список фраз которые нужно выделить bold в переводе.
+    """
+    try:
+        translation = await groq_client.translate_text(
+            clean_text, recast_phrases=recast_phrases
+        )
+        safe = _md_bold_to_html(html.escape(translation))
+        _cache_translation(msg_id, safe)
+    except Exception as e:
+        logger.error(f"Error in _preload_translation for msg {msg_id}: {e}")
+
 def _md_bold_to_html(text: str) -> str:
     """Конвертирует **bold** markdown в <b>bold</b> HTML для Telegram."""
     return re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text, flags=re.DOTALL)
@@ -504,14 +530,19 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             # Мультибабл: последовательная отправка с typing-задержками
             # Translate только под последним сообщением — переводит ВСЕ баблы этого ответа
 
-            # Готовим объединённый текст всех баблов для кэша (вариант Б)
-            # _originals_cache хранит сырой текст БЕЗ **bold** — чтобы не путать LLM-акцент с recasting
-            all_bubbles_raw = "\n\n".join(
-                re.sub(r'\*\*(.+?)\*\*', r'\1', b) for b in pf_bubbles
-            )
+            # Готовим объединённый текст всех баблов для кэша
             all_bubbles_display = "\n\n".join(
                 _md_bold_to_html(html.escape(b)) for b in pf_bubbles
             )
+            # Чистый текст без ** для переводчика и для _originals_cache
+            import re as _re
+            all_bubbles_clean = "\n\n".join(
+                _re.sub(r'\*\*(.+?)\*\*', r'\1', b) for b in pf_bubbles
+            )
+            # Собираем recast фразы из всех баблов
+            all_recast_phrases = []
+            for b in pf_bubbles:
+                all_recast_phrases.extend(_extract_recast_phrases(b))
 
             prev_msg_ids: list = []
 
@@ -528,12 +559,19 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
                         parse_mode="HTML"
                     )
                     # Кэшируем объединённый текст всех баблов — Translate покажет весь ответ
-                    _cache_original(sent.message_id, all_bubbles_raw)
+                    _cache_original(sent.message_id, all_bubbles_clean)
                     _cache_display(sent.message_id, all_bubbles_display)
                     _cache_persona_display(sent.message_id, persona_display)
                     # Запоминаем предыдущие баблы для удаления при переводе
                     if prev_msg_ids:
                         _cache_bubble_group(sent.message_id, prev_msg_ids)
+                    # Кэшируем recast фразы
+                    if all_recast_phrases:
+                        _cache_recast(sent.message_id, all_recast_phrases)
+                    # Запускаем фоновый перевод — к моменту нажатия Translate уже готов
+                    asyncio.create_task(
+                        _preload_translation(sent.message_id, all_bubbles_clean, all_recast_phrases)
+                    )
                     await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
                 else:
                     sent_prev = await message.answer(f"💬 {display_bubble}", parse_mode="HTML")
