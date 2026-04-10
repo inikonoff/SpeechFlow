@@ -1125,6 +1125,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
             )
             return response.choices[0].message.content
 
+        raw = ""
         try:
             raw = await self._make_request(_multibubble)
             logger.info(f"Multibubble raw: {raw!r}")
@@ -1132,7 +1133,10 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
             raw_clean = re.sub(r"```json\s*|```", "", raw).strip()
             match = re.search(r'\{.*\}', raw_clean, re.DOTALL)
             if not match:
-                raise ValueError("No JSON found")
+                # LLM вернул не JSON — попробуем разбить по переносам строк
+                logger.warning(f"No JSON in multibubble response, splitting by newlines: {raw!r}")
+                lines = [l.strip() for l in raw_clean.split("\n") if l.strip()]
+                return lines[:3] if lines else ["Tell me more."]
             parsed = json.loads(match.group(0))
             msgs = parsed.get("messages", [])
             if isinstance(msgs, str):
