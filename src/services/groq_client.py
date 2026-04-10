@@ -245,6 +245,9 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 corrected=practice_error["corrected_text"],
             )
 
+        # В Flow Mode нет recasting — запрещаем любой bold
+        persona_prompt += "\n\n# FORMATTING\nPlain text only. No asterisks or markdown."
+
         messages = [{"role": "system", "content": persona_prompt}]
         if history:
             messages.extend(history)
