@@ -801,7 +801,18 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
     # ─── Перевод ───────────────────────────────────────────────────────────
 
-    async def translate_text(self, text: str) -> str:
+    async def translate_text(self, text: str, recast_phrases: Optional[List[str]] = None) -> str:
+        # Строим инструкцию по bold
+        if recast_phrases:
+            phrases_str = ", ".join(f'"{p}"' for p in recast_phrases)
+            bold_instruction = (
+                f"4. These phrases were corrected for the user (recasting): {phrases_str}. "
+                f"Find their translation equivalents and wrap them in **double asterisks**. "
+                f"Do NOT bold anything else."
+            )
+        else:
+            bold_instruction = "4. Do NOT add **asterisks** or any bold formatting to the translation."
+
         async def _translate(client):
             response = await client.chat.completions.create(
                 model="meta-llama/llama-4-scout-17b-16e-instruct",
@@ -809,15 +820,19 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                     {
                         "role": "system",
                         "content": (
-                            "You are a translator. Translate the given English text to Russian. "
-                            "If the text contains words wrapped in **double asterisks**, "
-                            "keep the **double asterisks** around the translated equivalent. "
-                            "Return only the translation, no comments or explanations."
+                            "You are a translator. Translate the given English text to Russian.\n\n"
+                            "Rules:\n"
+                            "1. Translate idioms and expressions by meaning, not literally. "
+                            "Example: \'He\'s my rock\' → \'Он моя опора\', not \'Он моя скала\'. "
+                            "Example: \'game-changer\' → \'это что-то особенное\'.\n"
+                            "2. Preserve the casual conversational tone of the original.\n"
+                            "3. Return only the translation, no comments or explanations.\n"
+                            f"{bold_instruction}"
                         )
                     },
                     {"role": "user", "content": text}
                 ],
-                temperature=0.0,
+                temperature=0.1,
                 max_tokens=400
             )
             return response.choices[0].message.content
@@ -1069,7 +1084,13 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
             )
 
         if recasting_enabled:
-            system_prompt += f"\n\n{RECASTING_BLOCK}\nApply recasting in one of the messages where it fits naturally."
+            system_prompt += (
+                f"\n\n{RECASTING_BLOCK}\n"
+                "# RECASTING OBLIGATION\n"
+                "If the user made ANY grammatical error — you MUST recast it. No exceptions.\n"
+                "Use **double asterisks** around the recasted phrase. This is the ONLY place bold is allowed.\n"
+                "If no error — no bold, respond normally."
+            )
 
         if practice_error and practice_error.get("corrected_text"):
             system_prompt += "\n\n" + MISTAKES_PRACTICE_PASSIVE.format(
@@ -1080,9 +1101,13 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         system_prompt += (
             '\n\n# OUTPUT FORMAT\n'
-            'Return ONLY valid JSON. No markdown wrapping, no preamble.\n'
-            'Message strings MAY contain **double asterisks** around recasted phrases — this is required and must be preserved as-is.\n'
-            '{"messages": ["first message", "second message", "optional third"]}'
+            'Return a JSON object with a "messages" array.\n'
+            'Example: {"messages": ["first message", "second message"]}\n'
+            'Rules:\n'
+            '- 2-3 items in the array\n'
+            '- Plain text only — NO markdown, NO bold, NO asterisks\n'
+            '- EXCEPTION: **double asterisks** around recasted phrases are required when recasting\n'
+            '- No code blocks, no preamble'
         )
 
         messages = [{"role": "system", "content": system_prompt}]
@@ -1095,23 +1120,27 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 model="meta-llama/llama-4-scout-17b-16e-instruct",
                 messages=messages,
                 temperature=0.85,
-                max_tokens=250,
-                response_format={"type": "json_object"},
+                max_tokens=300,
+                # response_format убран — json_object подавляет **bold** внутри строк
             )
             return response.choices[0].message.content
 
         try:
             raw = await self._make_request(_multibubble)
-            parsed = json.loads(raw)
+            logger.info(f"Multibubble raw: {raw!r}")
+            # Убираем возможные ```json``` блоки
+            raw_clean = re.sub(r"```json\s*|```", "", raw).strip()
+            match = re.search(r'\{.*\}', raw_clean, re.DOTALL)
+            if not match:
+                raise ValueError("No JSON found")
+            parsed = json.loads(match.group(0))
             msgs = parsed.get("messages", [])
-            # Страховка: если вернул строку вместо списка
             if isinstance(msgs, str):
                 return [msgs]
-            # Убираем пустые сообщения
             msgs = [m.strip() for m in msgs if m and m.strip()]
             return msgs if msgs else ["Ha, interesting. Tell me more."]
         except Exception as e:
-            logger.error(f"❌ Ошибка PenFriend multibubble: {e}")
+            logger.error(f"❌ Ошибка PenFriend multibubble: {e}, raw={raw!r}")
             return ["Ha, interesting. Tell me more."]
 
     # ─── Автооценка уровня (Блок 2) ───────────────────────────────────────
