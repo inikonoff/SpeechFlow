@@ -1,3 +1,9 @@
+# CHANGELOG: 2026-04-10
+# - generate_penfriend_multibubble: упрощён recasting до версии v3 — только RECASTING_BLOCK без дополнений
+# - generate_penfriend_multibubble: убраны все упоминания asterisks/bold из OUTPUT FORMAT
+# - translate_text: добавлен recast_phrases, идиомы по смыслу, запрет случайного bold
+# - generate_penfriend_multibubble: raw="" перед try, fallback по newlines если нет JSON
+
 import random
 import asyncio
 import logging
@@ -1089,13 +1095,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
             )
 
         if recasting_enabled:
-            system_prompt += (
-                f"\n\n{RECASTING_BLOCK}\n"
-                "# RECASTING OBLIGATION\n"
-                "If the user made ANY grammatical error — you MUST recast it. No exceptions.\n"
-                "Use **double asterisks** around the recasted phrase. This is the ONLY place bold is allowed.\n"
-                "If no error — no bold, respond normally."
-            )
+            system_prompt += f"\n\n{RECASTING_BLOCK}"
 
         if practice_error and practice_error.get("corrected_text"):
             system_prompt += "\n\n" + MISTAKES_PRACTICE_PASSIVE.format(
@@ -1108,9 +1108,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
             '\n\n# OUTPUT FORMAT\n'
             'Return a JSON object with a "messages" array.\n'
             'Example: {"messages": ["first message", "second message"]}\n'
-            'Rules:\n'
             '- 2-3 items in the array\n'
-            '- EXCEPTION: **double asterisks** around recasted phrases are required when recasting\n'
             '- No code blocks, no preamble'
         )
 
