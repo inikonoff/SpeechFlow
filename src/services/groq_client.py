@@ -1,8 +1,7 @@
-# CHANGELOG: 2026-04-10
-# - generate_penfriend_multibubble: упрощён recasting до версии v3 — только RECASTING_BLOCK без дополнений
-# - generate_penfriend_multibubble: убраны все упоминания asterisks/bold из OUTPUT FORMAT
-# - translate_text: добавлен recast_phrases, идиомы по смыслу, запрет случайного bold
-# - generate_penfriend_multibubble: raw="" перед try, fallback по newlines если нет JSON
+# CHANGELOG: 2026-04-11
+# - generate_penfriend_multibubble: recasting упрощён до чистого RECASTING_BLOCK (как в v3)
+# - generate_penfriend_multibubble: убраны все упоминания NO asterisks из OUTPUT FORMAT
+# - raw="" перед try в multibubble, fallback по newlines если нет JSON
 
 import random
 import asyncio
