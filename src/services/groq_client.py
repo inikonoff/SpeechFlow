@@ -229,6 +229,12 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         practice_error: Optional[Dict[str, Any]] = None,
     ) -> str:
         persona_prompt = get_persona_prompt(persona_key, session_count=session_count)
+        persona_prompt += (
+            "\n\n# IMPORTANT: IGNORE PREVIOUS PERSONA"
+            "\nPrevious assistant messages in this conversation may be from a DIFFERENT character."
+            f"\nYou are {persona_key.upper()}. Do NOT adopt any personality, role, or identity from those messages."
+            "\nOnly use the factual topics discussed — not who said them or how they spoke."
+        )
 
         if summary:
             persona_prompt += (
@@ -289,8 +295,12 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         persona_prompt = get_persona_prompt(persona_key, session_count=10)
 
         system_prompt = (
-            f"{persona_prompt}\n\n"
-            "# PENFRIEND MODE\n"
+            f"{persona_prompt}"
+            "\n\n# IMPORTANT: IGNORE PREVIOUS PERSONA"
+            "\nPrevious assistant messages in this conversation may be from a DIFFERENT character."
+            f"\nYou are {persona_key.upper()}. Do NOT adopt any personality, role, or identity from those messages."
+            "\nOnly use the factual topics discussed — not who said them or how they spoke."
+            "\n\n# PENFRIEND MODE\n"
             "This is a text-based conversation. You are a real person texting.\n"
             "Keep it natural — casual phrasing, occasional shorthand, good English."
         )
@@ -1067,8 +1077,12 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         persona_prompt = get_persona_prompt(persona_key, session_count=10)
 
         system_prompt = (
-            f"{persona_prompt}\n\n"
-            "# PENFRIEND MULTIBUBBLE MODE\n"
+            f"{persona_prompt}"
+            "\n\n# IMPORTANT: IGNORE PREVIOUS PERSONA"
+            "\nPrevious assistant messages in this conversation may be from a DIFFERENT character."
+            f"\nYou are {persona_key.upper()}. Do NOT adopt any personality, role, or identity from those messages."
+            "\nOnly use the factual topics discussed — not who said them or how they spoke."
+            "\n\n# PENFRIEND MULTIBUBBLE MODE\n"
             "You are texting — like a real person, not writing an essay.\n"
             "Real people split their thoughts into separate short messages.\n\n"
             "# YOUR TASK\n"
