@@ -1,10 +1,8 @@
-# CHANGELOG: 2026-04-11
-# - RECASTING_BLOCK: упрощён и сокращён (один пример, чёткая инструкция)
-# - generate_penfriend_multibubble: добавлен Chain-of-Thought через поле "grammar_check"
-#   LLM сначала явно анализирует ошибку, потом пишет сообщения — recasting стабильнее
-# - generate_penfriend_multibubble: OUTPUT FORMAT с примером grammar_check + messages
-# - generate_stats_deep_dive: версия v3 — нарративный отчёт без примеров речи
-# - raw="" перед try в multibubble, fallback по newlines если нет JSON
+# CHANGELOG: 2026-04-12
+# - generate_penfriend_multibubble: response_format json_object возвращён
+# - generate_penfriend_multibubble: новый формат JSON — has_error + correct_word + messages
+# - correct_word передаётся через маркер __RECAST__ в первом сообщении
+# - message.py обрабатывает маркер и выделяет correct_word bold самостоятельно
 
 import random
 import asyncio
@@ -1108,16 +1106,16 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
             )
 
         system_prompt += (
-            '\n\n# OUTPUT FORMAT (STRICT JSON)\n'
-            'You MUST return a JSON object with two fields:\n'
-            '1. "grammar_check": string (Briefly state the user\'s grammar error and correct form. If no errors, write "none").\n'
-            '2. "messages": array of strings (Your 2-3 casual text messages. If you corrected an error, wrap the corrected phrase in **double asterisks** inside the string).\n'
-            'Example:\n'
-            '{\n'
-            '  "grammar_check": "User said \'I goed\', should be \'I went\'",\n'
-            '  "messages": ["Oh wow!", "So **you went** there alone? That is brave."]\n'
-            '}\n'
-            '- No markdown code blocks around the JSON.'
+            '\n\n# OUTPUT FORMAT (json_object mode)\n'
+            'Return ONLY a JSON object with these fields:\n'
+            '{ "has_error": true/false, "correct_word": "corrected phrase or empty string", "messages": ["msg1", "msg2"] }\n'
+            'Rules:\n'
+            '- has_error: true if user made ANY grammar/spelling/vocabulary mistake\n'
+            '- correct_word: the corrected word/phrase that naturally appears in your response (empty string if no error)\n'
+            '- messages: 2-3 plain text strings, NO asterisks, NO bold\n'
+            '- The correct_word MUST appear naturally in one of your messages\n'
+            'Example: user wrote "I goed to store"\n'
+            '{"has_error": true, "correct_word": "went to the store", "messages": ["Oh nice, you went to the store!", "What did you get?"]}'
         )
 
         messages = [{"role": "system", "content": system_prompt}]
@@ -1131,6 +1129,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 messages=messages,
                 temperature=0.85,
                 max_tokens=300,
+                response_format={"type": "json_object"},
             )
             return response.choices[0].message.content
 
@@ -1138,23 +1137,23 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         try:
             raw = await self._make_request(_multibubble)
             logger.info(f"Multibubble raw: {raw!r}")
-            # Убираем возможные ```json``` блоки
-            raw_clean = re.sub(r"```json\s*|```", "", raw).strip()
-            match = re.search(r'\{.*\}', raw_clean, re.DOTALL)
-            if not match:
-                # LLM вернул не JSON — попробуем разбить по переносам строк
-                logger.warning(f"No JSON in multibubble response, splitting by newlines: {raw!r}")
-                lines = [l.strip() for l in raw_clean.split("\n") if l.strip()]
-                return lines[:3] if lines else ["Tell me more."]
-            
-            parsed = json.loads(match.group(0))
-            
+            parsed = json.loads(raw)
+
             msgs = parsed.get("messages", [])
             if isinstance(msgs, str):
-                return [msgs]
-            
+                msgs = [msgs]
             msgs = [m.strip() for m in msgs if m and m.strip()]
-            return msgs if msgs else ["Ha, interesting. Tell me more."]
+            if not msgs:
+                return ["Ha, interesting. Tell me more."]
+
+            # Если есть ошибка — прикрепляем correct_word маркером
+            # message.py разберёт его, выделит bold и передаст переводчику
+            has_error = parsed.get("has_error", False)
+            correct_word = parsed.get("correct_word", "").strip() if has_error else ""
+            if correct_word:
+                msgs[0] = f"__RECAST__{correct_word}__RECAST__{msgs[0]}"
+
+            return msgs
         except Exception as e:
             logger.error(f"❌ Ошибка PenFriend multibubble: {e}, raw={raw!r}")
             return ["Ha, interesting. Tell me more."]
