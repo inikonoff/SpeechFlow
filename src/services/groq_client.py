@@ -3,7 +3,6 @@
 # - generate_penfriend_multibubble: новый формат JSON — has_error + correct_word + messages
 # - correct_word передаётся через маркер __RECAST__ в первом сообщении
 # - message.py обрабатывает маркер и выделяет correct_word bold самостоятельно
-
 import random
 import asyncio
 import logging
