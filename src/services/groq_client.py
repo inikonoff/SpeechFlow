@@ -2,6 +2,7 @@
 # - generate_penfriend_multibubble: recasting упрощён до чистого RECASTING_BLOCK (как в v3)
 # - generate_penfriend_multibubble: убраны все упоминания NO asterisks из OUTPUT FORMAT
 # - raw="" перед try в multibubble, fallback по newlines если нет JSON
+# - Добавлен Chain-of-Thought (grammar_check) в multibubble для стабильного recasting
 
 import random
 import asyncio
@@ -39,29 +40,16 @@ MISTAKES_PRACTICE_ACTIVE = (
 )
 
 RECASTING_BLOCK = """
-# RECASTING — MANDATORY OVERRIDE
-IGNORE any previous instruction about not correcting grammar. In this mode you MUST recast.
+# CRITICAL INSTRUCTION: RECASTING MODE
+The user is learning English. You MUST implicitly correct their biggest grammar/vocabulary error.
+1. Do NOT say "you made a mistake".
+2. Use the CORRECTED phrase naturally in your response as if it's your own words.
+3. You MUST wrap ONLY the corrected phrase in **double asterisks**.
+If the user's English is completely correct — do not use asterisks.
 
-Recasting = you naturally use the corrected form of the user's error in your own reply.
-This is your primary job in every message where an error exists.
-
-Rules:
-1. Find the ONE most important error. Priority: wrong/missing verb > wrong tense > wrong preposition > minor.
-2. Echo the corrected phrase naturally inside your response — as if it's your own words.
-3. Wrap ONLY the corrected phrase in **bold** (**like this**). Nothing else bold.
-4. Never name the error, never say "you should say", never break character.
-5. If the user's English is correct — no bold, respond normally.
-6. ONE recast per message maximum.
-
-Examples:
-  User: "I glad you wrote"
-  You: "**I'm glad** you reached out — I was just thinking about you!"
-
-  User: "Yesterday I go to store"
-  You: "Oh nice, **you went to the store** — did you find what you needed?"
-
-  User: "I am looking forward to meet you"
-  You: "**Looking forward to meeting** you too — it's been too long."
+Example:
+User: "Yesterday I go to store"
+You: "Oh nice, **you went to the store** — did you find what you needed?"
 """
 
 
@@ -1118,11 +1106,16 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
             )
 
         system_prompt += (
-            '\n\n# OUTPUT FORMAT\n'
-            'Return a JSON object with a "messages" array.\n'
-            'Example: {"messages": ["first message", "second message"]}\n'
-            '- 2-3 items in the array\n'
-            '- No code blocks, no preamble'
+            '\n\n# OUTPUT FORMAT (STRICT JSON)\n'
+            'You MUST return a JSON object with two fields:\n'
+            '1. "grammar_check": string (Briefly state the user\'s grammar error and correct form. If no errors, write "none").\n'
+            '2. "messages": array of strings (Your 2-3 casual text messages. If you corrected an error, wrap the corrected phrase in **double asterisks** inside the string).\n'
+            'Example:\n'
+            '{\n'
+            '  "grammar_check": "User said \'I goed\', should be \'I went\'",\n'
+            '  "messages": ["Oh wow!", "So **you went** there alone? That is brave."]\n'
+            '}\n'
+            '- No markdown code blocks around the JSON.'
         )
 
         messages = [{"role": "system", "content": system_prompt}]
@@ -1136,7 +1129,6 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 messages=messages,
                 temperature=0.85,
                 max_tokens=300,
-                # response_format убран — json_object подавляет **bold** внутри строк
             )
             return response.choices[0].message.content
 
@@ -1152,10 +1144,13 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 logger.warning(f"No JSON in multibubble response, splitting by newlines: {raw!r}")
                 lines = [l.strip() for l in raw_clean.split("\n") if l.strip()]
                 return lines[:3] if lines else ["Tell me more."]
+            
             parsed = json.loads(match.group(0))
+            
             msgs = parsed.get("messages", [])
             if isinstance(msgs, str):
                 return [msgs]
+            
             msgs = [m.strip() for m in msgs if m and m.strip()]
             return msgs if msgs else ["Ha, interesting. Tell me more."]
         except Exception as e:
