@@ -561,7 +561,7 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
                         for phrase in all_recast_phrases:
                             # case-insensitive поиск, выделяем первое вхождение
                             pattern = re.compile(re.escape(phrase), re.IGNORECASE)
-                            new_b = pattern.sub(r"**\g<0>**", b, count=1)
+                            new_b = pattern.sub(f"**{phrase}**", b, count=1)
                             if new_b != b:
                                 b = new_b
                                 recast_done = True
