@@ -1,3 +1,7 @@
+# CHANGELOG: 2026-04-12
+# - pf_bubbles: добавлен парсинг маркера __RECAST__correct_word__RECAST__
+# - correct_word выделяется <b>bold</b> в тексте бабла (первое вхождение)
+# - recast_phrases передаются переводчику для bold в переводе
 import logging
 import html
 import asyncio
@@ -530,21 +534,59 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             # Мультибабл: последовательная отправка с typing-задержками
             # Translate только под последним сообщением — переводит ВСЕ баблы этого ответа
 
+            # Извлекаем recast маркер из первого бабла если есть
+            # Формат: __RECAST__correct_word__RECAST__message text
+            all_recast_phrases = []
+            clean_bubbles = []
+            for b in pf_bubbles:
+                if b.startswith("__RECAST__"):
+                    parts = b.split("__RECAST__", 2)
+                    # parts[0] = "", parts[1] = correct_word, parts[2] = message
+                    correct_word = parts[1].strip()
+                    message_text = parts[2] if len(parts) > 2 else ""
+                    if correct_word:
+                        all_recast_phrases.append(correct_word)
+                    clean_bubbles.append(message_text)
+                else:
+                    clean_bubbles.append(b)
+            pf_bubbles = clean_bubbles
+
+            # Выделяем correct_word bold в тексте баблов
+            if all_recast_phrases:
+                import re as _re
+                bolded_bubbles = []
+                recast_done = False
+                for b in pf_bubbles:
+                    if not recast_done:
+                        for phrase in all_recast_phrases:
+                            # case-insensitive поиск, выделяем первое вхождение
+                            pattern = re.compile(re.escape(phrase), re.IGNORECASE)
+                            new_b = pattern.sub(f"**{phrase}**", b, count=1)
+                            if new_b != b:
+                                b = new_b
+                                recast_done = True
+                                break
+                    bolded_bubbles.append(b)
+                pf_bubbles = bolded_bubbles
+
             # Готовим объединённый текст всех баблов для кэша
             all_bubbles_display = "\n\n".join(
                 _md_bold_to_html(html.escape(b)) for b in pf_bubbles
             )
-            # Чистый текст без ** для переводчика и для _originals_cache
-            import re as _re
+            # Чистый текст без ** для переводчика
             all_bubbles_clean = "\n\n".join(
-                _re.sub(r'\*\*(.+?)\*\*', r'\1', b) for b in pf_bubbles
+                re.sub(r'\*\*(.+?)\*\*', r'\1', b) for b in pf_bubbles
             )
-            # Собираем recast фразы из всех баблов
-            all_recast_phrases = []
-            for b in pf_bubbles:
-                all_recast_phrases.extend(_extract_recast_phrases(b))
 
-            prev_msg_ids: list = []
+            # Переводим все баблы заранее — спойлер добавляется под последним
+            translation_html = ""
+            try:
+                translation_raw = await groq_client.translate_text(
+                    all_bubbles_clean, recast_phrases=all_recast_phrases
+                )
+                translation_html = _md_bold_to_html(html.escape(translation_raw))
+            except Exception as e:
+                logger.error(f"Error preloading translation: {e}")
 
             for i, bubble in enumerate(pf_bubbles):
                 is_last = (i == len(pf_bubbles) - 1)
@@ -554,28 +596,16 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
                 safe_bubble = html.escape(bubble)
                 display_bubble = _md_bold_to_html(safe_bubble)
                 if is_last:
+                    # Спойлер с переводом под последним баблом
+                    spoiler = ""
+                    if translation_html:
+                        spoiler = f"\n\n<blockquote expandable>🌐 {translation_html}</blockquote>"
                     sent = await message.answer(
-                        f"💬 {display_bubble}\n\n<i>{persona_display}</i>",
+                        f"💬 {display_bubble}\n\n<i>{persona_display}</i>{spoiler}",
                         parse_mode="HTML"
                     )
-                    # Кэшируем объединённый текст всех баблов — Translate покажет весь ответ
-                    _cache_original(sent.message_id, all_bubbles_clean)
-                    _cache_display(sent.message_id, all_bubbles_display)
-                    _cache_persona_display(sent.message_id, persona_display)
-                    # Запоминаем предыдущие баблы для удаления при переводе
-                    if prev_msg_ids:
-                        _cache_bubble_group(sent.message_id, prev_msg_ids)
-                    # Кэшируем recast фразы
-                    if all_recast_phrases:
-                        _cache_recast(sent.message_id, all_recast_phrases)
-                    # Запускаем фоновый перевод — к моменту нажатия Translate уже готов
-                    asyncio.create_task(
-                        _preload_translation(sent.message_id, all_bubbles_clean, all_recast_phrases)
-                    )
-                    await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
                 else:
-                    sent_prev = await message.answer(f"💬 {display_bubble}", parse_mode="HTML")
-                    prev_msg_ids.append(sent_prev.message_id)
+                    sent = await message.answer(f"💬 {display_bubble}", parse_mode="HTML")
         else:
             voice_bytes = await groq_client.text_to_speech(chat_response, voice=voice)
             if voice_bytes:
