@@ -1,8 +1,10 @@
 # CHANGELOG: 2026-04-11
-# - generate_penfriend_multibubble: recasting упрощён до чистого RECASTING_BLOCK (как в v3)
-# - generate_penfriend_multibubble: убраны все упоминания NO asterisks из OUTPUT FORMAT
+# - RECASTING_BLOCK: упрощён и сокращён (один пример, чёткая инструкция)
+# - generate_penfriend_multibubble: добавлен Chain-of-Thought через поле "grammar_check"
+#   LLM сначала явно анализирует ошибку, потом пишет сообщения — recasting стабильнее
+# - generate_penfriend_multibubble: OUTPUT FORMAT с примером grammar_check + messages
+# - generate_stats_deep_dive: версия v3 — нарративный отчёт без примеров речи
 # - raw="" перед try в multibubble, fallback по newlines если нет JSON
-# - Добавлен Chain-of-Thought (grammar_check) в multibubble для стабильного recasting
 
 import random
 import asyncio
