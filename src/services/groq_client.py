@@ -1,3 +1,8 @@
+# CHANGELOG: 2026-07-16
+# - suggest_english_name: новый метод — предлагает английский эквивалент имени (Илья→Elijah)
+# - generate_persona_greeting: добавлен параметр user_name — персонаж обращается по имени
+# - Все модели заменены с llama-4-scout-17b-16e-instruct на qwen/qwen3-32b
+
 # CHANGELOG: 2026-04-12
 # - generate_penfriend_multibubble: response_format json_object возвращён
 # - generate_penfriend_multibubble: новый формат JSON — has_error + correct_word + messages
@@ -170,7 +175,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _correct(client):
             response = await client.chat.completions.create(
-                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                model="qwen/qwen3-32b",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"USER TEXT: {text}\n\nAnalyze and correct."}
@@ -255,7 +260,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _flow(client):
             response = await client.chat.completions.create(
-                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                model="qwen/qwen3-32b",
                 messages=messages,
                 temperature=0.9,
                 max_tokens=300
@@ -315,7 +320,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _penfriend(client):
             response = await client.chat.completions.create(
-                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                model="qwen/qwen3-32b",
                 messages=messages,
                 temperature=0.85,
                 max_tokens=200
@@ -350,7 +355,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _opener(client):
             response = await client.chat.completions.create(
-                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                model="qwen/qwen3-32b",
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": "[start the conversation]"}
@@ -373,7 +378,8 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         persona_key: str,
         user_level: str,
         session_count: int = 0,
-        summary: Optional[str] = None
+        summary: Optional[str] = None,
+        user_name: str = "",
     ) -> str:
         persona_prompt = get_persona_prompt(persona_key, session_count=session_count)
 
@@ -386,6 +392,8 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         else:
             memory_block = ""
 
+        name_block = f"\n\n# USER NAME\nThe user's name is {user_name}. Use it naturally in your greeting." if user_name else ""
+
         context_instruction = (
             "[greet the user for the first time — you've never spoken before]"
             if session_count == 0
@@ -393,7 +401,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         )
 
         system = (
-            f"{persona_prompt}{memory_block}\n\n"
+            f"{persona_prompt}{memory_block}{name_block}\n\n"
             f"# YOUR TASK\n"
             f"The person just chose to talk with you. Say hello in your own voice.\n"
             f"One or two sentences. Warm but natural, not over-the-top excited.\n"
@@ -403,7 +411,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _greeting(client):
             response = await client.chat.completions.create(
-                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                model="qwen/qwen3-32b",
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": context_instruction}
@@ -424,7 +432,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
     async def detect_farewell(self, text: str) -> bool:
         async def _detect(client):
             response = await client.chat.completions.create(
-                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                model="qwen/qwen3-32b",
                 messages=[
                     {
                         "role": "system",
@@ -469,7 +477,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _summarize(client):
             response = await client.chat.completions.create(
-                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                model="qwen/qwen3-32b",
                 messages=[
                     {
                         "role": "system",
@@ -504,7 +512,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _merge(client):
             response = await client.chat.completions.create(
-                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                model="qwen/qwen3-32b",
                 messages=[
                     {
                         "role": "system",
@@ -576,7 +584,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _deep_dive(client):
             response = await client.chat.completions.create(
-                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                model="qwen/qwen3-32b",
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": data_summary}
@@ -658,7 +666,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _sunday(client):
             response = await client.chat.completions.create(
-                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                model="qwen/qwen3-32b",
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": "[write the deep dive]"}
@@ -790,7 +798,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _notify(client):
             response = await client.chat.completions.create(
-                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                model="qwen/qwen3-32b",
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": "[write the message]"}
@@ -822,7 +830,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _translate(client):
             response = await client.chat.completions.create(
-                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                model="qwen/qwen3-32b",
                 messages=[
                     {
                         "role": "system",
@@ -931,7 +939,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _chat(client):
             response = await client.chat.completions.create(
-                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                model="qwen/qwen3-32b",
                 messages=messages,
                 temperature=0.75,
                 max_tokens=300
@@ -1018,7 +1026,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _react(client):
             response = await client.chat.completions.create(
-                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                model="qwen/qwen3-32b",
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user",   "content": user_msg},
@@ -1124,7 +1132,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _multibubble(client):
             response = await client.chat.completions.create(
-                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                model="qwen/qwen3-32b",
                 messages=messages,
                 temperature=0.85,
                 max_tokens=300,
@@ -1202,7 +1210,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _assess(client):
             response = await client.chat.completions.create(
-                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                model="qwen/qwen3-32b",
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user",   "content": f"Current declared level: {current_level}\n\nMessages:\n{sample}"},
@@ -1223,6 +1231,118 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         except Exception as e:
             logger.error(f"❌ Ошибка автооценки уровня: {e}")
             return {"assessed_level": current_level, "confidence": "low"}
+
+
+    async def generate_session_analysis(self, messages: list) -> str:
+        """
+        Анализирует сессию и возвращает текстовый разбор:
+        темы разговора, ошибки пользователя, прогресс.
+        Используется в Session Summary PDF.
+        """
+        user_messages = [m["content"] for m in messages if m.get("role") == "user"]
+        if not user_messages:
+            return "No user messages to analyze."
+
+        sample = "\n".join(f"- {m}" for m in user_messages[-20:])
+
+        system = (
+            "You are an English language coach analyzing a student's conversation session.\n\n"
+            "Write a concise Session Analysis in English. Structure:\n\n"
+            "TOPICS DISCUSSED\n"
+            "List the main topics covered in the conversation.\n\n"
+            "LANGUAGE OBSERVATIONS\n"
+            "Note patterns in the student's English: strengths, recurring errors, vocabulary range.\n\n"
+            "PROGRESS NOTES\n"
+            "One or two sentences on what went well and what to focus on next.\n\n"
+            "Keep it factual, warm, and under 200 words total. No bullet points — use plain prose."
+        )
+
+        async def _analyze(client):
+            response = await client.chat.completions.create(
+                model="qwen/qwen3-32b",
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user",   "content": f"Student messages from this session:\n{sample}"},
+                ],
+                temperature=0.3,
+                max_tokens=400,
+            )
+            return response.choices[0].message.content.strip()
+
+        try:
+            return await self._make_request(_analyze)
+        except Exception as e:
+            logger.error(f"Error in generate_session_analysis: {e}")
+            return "Analysis unavailable."
+
+    async def suggest_synonym(self, word: str) -> str:
+        """Предлагает один синоним для слова. Используется в Synonym Streak."""
+        async def _syn(client):
+            response = await client.chat.completions.create(
+                model="qwen/qwen3-32b",
+                messages=[
+                    {"role": "system", "content": (
+                        "You suggest a single English synonym for the given word.\n"
+                        "Rules:\n"
+                        "- Return ONLY the synonym word or short phrase (1-2 words max)\n"
+                        "- Choose a natural, common alternative suitable for spoken English\n"
+                        "- If no good synonym exists, return: NONE\n"
+                        "- No explanations, no punctuation"
+                    )},
+                    {"role": "user", "content": word},
+                ],
+                temperature=0.3,
+                max_tokens=10,
+            )
+            return response.choices[0].message.content.strip()
+
+        try:
+            result = await self._make_request(_syn)
+            if result and result != "NONE" and len(result) < 30:
+                return result
+            return ""
+        except Exception as e:
+            logger.error(f"Error in suggest_synonym: {e}")
+            return ""
+
+    async def suggest_english_name(self, name: str) -> str:
+        """
+        Предлагает английский эквивалент имени пользователя.
+        Например: Илья → Elijah, Пётр → Peter, Иван → John.
+        Возвращает пустую строку если английский эквивалент не найден или имя уже английское.
+        """
+        system = (
+            "You are a helpful assistant that knows name equivalents across languages.\n"
+            "The user will give you a name. Your task:\n"
+            "1. If the name has a well-known English equivalent (e.g. Илья→Elijah, Пётр→Peter, Иван→John, Мария→Mary), return ONLY that English name — nothing else.\n"
+            "2. If the name is already English or has no common English equivalent, return exactly: NONE\n"
+            "Rules:\n"
+            "- Return ONLY the English name or NONE. No explanations, no punctuation.\n"
+            "- Use the most common/classic English equivalent, not a transliteration.\n"
+            "- Examples: Илья→Elijah, Александр→Alexander, Екатерина→Catherine, Михаил→Michael, Андрей→Andrew\n"
+            "- If unsure, return NONE."
+        )
+
+        async def _suggest(client):
+            response = await client.chat.completions.create(
+                model="qwen/qwen3-32b",
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user",   "content": name},
+                ],
+                temperature=0.0,
+                max_tokens=20,
+            )
+            return response.choices[0].message.content.strip()
+
+        try:
+            result = await self._make_request(_suggest)
+            if result and result != "NONE" and len(result) < 30:
+                return result
+            return ""
+        except Exception as e:
+            logger.error(f"Error in suggest_english_name: {e}")
+            return ""
 
 
 groq_client = GroqClient(settings.groq_api_keys_list)

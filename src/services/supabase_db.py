@@ -1,3 +1,7 @@
+# CHANGELOG: 2026-07-16
+# - get_or_create_user: добавлены поля user_name, english_name, learning_goal, subscription_plan, subscription_expires_at, daily_messages_used, daily_messages_reset_date, synonym_streak_enabled
+# - Новые методы: set_user_name, check_message_limit, increment_daily_messages, activate_subscription, complete_onboarding, get_user_message_count
+
 import logging
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone, timedelta
@@ -53,7 +57,20 @@ class SupabaseDB:
                 "last_notified_at": None,
                 "reengagement_count": 0,
                 "session_count": 0,
-                "last_active": datetime.utcnow().isoformat()
+                "last_active": datetime.utcnow().isoformat(),
+                # Онбординг v2
+                "user_name": None,
+                "english_name": None,
+                "learning_goal": None,
+                "onboarding_completed": False,
+                # Подписка
+                "subscription_plan": "free",
+                "subscription_expires_at": None,
+                # Лимиты сообщений
+                "daily_messages_used": 0,
+                "daily_messages_reset_date": datetime.utcnow().date().isoformat(),
+                # Synonym Streak
+                "synonym_streak_enabled": False,
             }
             response = self.client.table("users").insert(user_data).execute()
             return response.data[0]
@@ -606,6 +623,132 @@ class SupabaseDB:
             return response.count or 0
         except Exception as e:
             logger.error(f"Error getting message count for user {user_id}: {e}")
+            return 0
+
+
+    # ─── Онбординг v2 ──────────────────────────────────────────────────────────
+
+    async def set_user_name(self, telegram_id: int, user_name: str, english_name: str) -> bool:
+        return await self.update_user(telegram_id, {
+            "user_name": user_name,
+            "english_name": english_name,
+        })
+
+    async def set_learning_goal(self, telegram_id: int, goal: str) -> bool:
+        return await self.update_user(telegram_id, {"learning_goal": goal})
+
+    async def complete_onboarding(self, telegram_id: int) -> bool:
+        return await self.update_user(telegram_id, {"onboarding_completed": True})
+
+    # ─── Лимиты сообщений ──────────────────────────────────────────────────────
+
+    async def check_message_limit(self, telegram_id: int) -> dict:
+        """
+        Проверяет лимит сообщений пользователя.
+        Возвращает: {"allowed": bool, "used": int, "limit": int, "plan": str}
+        """
+        try:
+            from src.config import get_daily_message_limit
+            user = await self.get_or_create_user(telegram_id)
+            plan = user.get("subscription_plan", "free")
+            limit = get_daily_message_limit(plan)
+            today = datetime.utcnow().date().isoformat()
+            reset_date = user.get("daily_messages_reset_date", today)
+
+            # Сброс счётчика если новый день
+            if reset_date != today:
+                await self.update_user(telegram_id, {
+                    "daily_messages_used": 0,
+                    "daily_messages_reset_date": today,
+                })
+                used = 0
+            else:
+                used = user.get("daily_messages_used", 0)
+
+            # 0 = безлимит (pro)
+            allowed = (limit == 0) or (used < limit)
+            return {"allowed": allowed, "used": used, "limit": limit, "plan": plan}
+        except Exception as e:
+            logger.error(f"Error checking message limit: {e}")
+            return {"allowed": True, "used": 0, "limit": 0, "plan": "free"}
+
+    async def increment_daily_messages(self, telegram_id: int) -> bool:
+        """Увеличивает счётчик использованных сообщений за день."""
+        try:
+            user = await self.get_or_create_user(telegram_id)
+            used = user.get("daily_messages_used", 0)
+            return await self.update_user(telegram_id, {"daily_messages_used": used + 1})
+        except Exception as e:
+            logger.error(f"Error incrementing daily messages: {e}")
+            return False
+
+    # ─── Подписка ──────────────────────────────────────────────────────────────
+
+    async def activate_subscription(self, telegram_id: int, plan: str, period: str) -> bool:
+        """
+        Активирует подписку после успешной оплаты Stars.
+        period: "week" или "month"
+        """
+        try:
+            from datetime import timedelta
+            now = datetime.utcnow()
+            if period == "week":
+                expires = now + timedelta(days=7)
+            else:
+                expires = now + timedelta(days=30)
+            return await self.update_user(telegram_id, {
+                "subscription_plan": plan,
+                "subscription_expires_at": expires.isoformat(),
+            })
+        except Exception as e:
+            logger.error(f"Error activating subscription: {e}")
+            return False
+
+    async def check_subscription_expired(self, telegram_id: int) -> bool:
+        """Проверяет и сбрасывает истёкшую подписку. Возвращает True если сброс произошёл."""
+        try:
+            user = await self.get_or_create_user(telegram_id)
+            expires_str = user.get("subscription_expires_at")
+            plan = user.get("subscription_plan", "free")
+            if plan == "free" or not expires_str:
+                return False
+            expires = datetime.fromisoformat(expires_str)
+            if datetime.utcnow() > expires:
+                await self.update_user(telegram_id, {
+                    "subscription_plan": "free",
+                    "subscription_expires_at": None,
+                })
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Error checking subscription: {e}")
+            return False
+
+    # ─── Synonym Streak ─────────────────────────────────────────────────────────
+
+    async def toggle_synonym_streak(self, telegram_id: int) -> bool:
+        """Переключает Synonym Streak, возвращает новое значение."""
+        try:
+            user = await self.get_or_create_user(telegram_id)
+            new_val = not user.get("synonym_streak_enabled", False)
+            await self.update_user(telegram_id, {"synonym_streak_enabled": new_val})
+            return new_val
+        except Exception as e:
+            logger.error(f"Error toggling synonym streak: {e}")
+            return False
+
+    # ─── Счётчик сообщений для автооценки уровня ───────────────────────────────
+
+    async def get_user_message_count(self, user_id: int) -> int:
+        try:
+            response = (self.client.table("messages")
+                        .select("id", count="exact")
+                        .eq("user_id", user_id)
+                        .eq("role", "user")
+                        .execute())
+            return response.count or 0
+        except Exception as e:
+            logger.error(f"Error getting message count: {e}")
             return 0
 
 
