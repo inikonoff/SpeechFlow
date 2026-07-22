@@ -1,3 +1,9 @@
+# CHANGELOG: 2026-07-16
+# - get_settings_keyboard: все вызовы обновлены с synonym_streak параметром
+# - toggle_synonym_streak: новый хендлер
+# - Paywall: upgrade, paywall_plan_*, paywall_buy_*, pre_checkout, successful_payment
+# - Импорты: get_paywall_keyboard, get_paywall_period_keyboard, get_paywall_success_keyboard
+
 import logging
 import html
 import re
@@ -23,6 +29,9 @@ from src.bot.keyboards import (
     get_admin_users_keyboard,
     get_admin_user_card_keyboard,
     get_stats_back_keyboard,
+    get_paywall_keyboard,
+    get_paywall_period_keyboard,
+    get_paywall_success_keyboard,
 )
 from src.personas import get_all_personas
 from src.services.supabase_db import db
@@ -73,13 +82,14 @@ async def cmd_stats(message: Message):
 @router.message(Command("settings"))
 async def cmd_settings(message: Message):
     user = await db.get_or_create_user(message.from_user.id)
-    notif = user.get("notifications_enabled", True)
+    notif     = user.get("notifications_enabled", True)
     recasting = user.get("recasting_enabled", False)
-    practice = user.get("mistakes_practice_enabled", False)
+    practice  = user.get("mistakes_practice_enabled", False)
+    streak    = user.get("synonym_streak_enabled", False)
     await message.answer(
         "⚙️ <b>Settings</b>",
         parse_mode="HTML",
-        reply_markup=get_settings_keyboard(notif, recasting, practice, message.from_user.id)
+        reply_markup=get_settings_keyboard(notif, recasting, practice, streak, message.from_user.id)
     )
 
 @router.message(Command("support"))
@@ -214,14 +224,15 @@ async def show_how_to_use(callback: CallbackQuery):
 async def show_settings(callback: CallbackQuery):
     try:
         user = await db.get_or_create_user(callback.from_user.id)
-        notif = user.get("notifications_enabled", True)
+        notif     = user.get("notifications_enabled", True)
         recasting = user.get("recasting_enabled", False)
-        practice = user.get("mistakes_practice_enabled", False)
+        practice  = user.get("mistakes_practice_enabled", False)
+        streak    = user.get("synonym_streak_enabled", False)
         await safe_edit_text(
             callback.message,
             "⚙️ <b>Settings</b>",
             parse_mode="HTML",
-            reply_markup=get_settings_keyboard(notif, recasting, practice, callback.from_user.id)
+            reply_markup=get_settings_keyboard(notif, recasting, practice, streak, callback.from_user.id)
         )
         await callback.answer()
     except Exception as e:
@@ -239,10 +250,11 @@ async def toggle_notifications(callback: CallbackQuery):
         await callback.answer(f"Notifications {status}", show_alert=False)
 
         recasting = user.get("recasting_enabled", False)
-        practice = user.get("mistakes_practice_enabled", False)
+        practice  = user.get("mistakes_practice_enabled", False)
+        streak    = user.get("synonym_streak_enabled", False)
         await safe_edit_reply_markup(
             callback.message,
-            reply_markup=get_settings_keyboard(new_value, recasting, practice, callback.from_user.id)
+            reply_markup=get_settings_keyboard(new_value, recasting, practice, streak, callback.from_user.id)
         )
     except Exception as e:
         logger.error(f"Error toggling notifications: {e}")
@@ -257,10 +269,11 @@ async def cq_toggle_recasting(callback: CallbackQuery):
 
         user = await db.get_or_create_user(callback.from_user.id)
         notif = user.get("notifications_enabled", True)
-        practice = user.get("mistakes_practice_enabled", False)
+        practice  = user.get("mistakes_practice_enabled", False)
+        streak    = user.get("synonym_streak_enabled", False)
         await safe_edit_reply_markup(
             callback.message,
-            reply_markup=get_settings_keyboard(notif, new_val, practice, callback.from_user.id)
+            reply_markup=get_settings_keyboard(notif, new_val, practice, streak, callback.from_user.id)
         )
     except Exception as e:
         logger.error(f"Error toggling recasting: {e}")
@@ -273,15 +286,158 @@ async def cq_toggle_mistakes_practice(callback: CallbackQuery):
         status = "ON 🎯" if new_val else "OFF 🎯"
         await callback.answer(f"Mistakes Practice {status}", show_alert=False)
         user = await db.get_or_create_user(callback.from_user.id)
-        notif    = user.get("notifications_enabled", True)
+        notif     = user.get("notifications_enabled", True)
         recasting = user.get("recasting_enabled", False)
+        streak    = user.get("synonym_streak_enabled", False)
         await safe_edit_reply_markup(
             callback.message,
-            reply_markup=get_settings_keyboard(notif, recasting, new_val, callback.from_user.id)
+            reply_markup=get_settings_keyboard(notif, recasting, new_val, streak, callback.from_user.id)
         )
     except Exception as e:
         logger.error(f"Error toggling mistakes practice: {e}")
         await callback.answer("Error.", show_alert=True)
+
+@router.callback_query(F.data == "toggle_synonym_streak")
+async def cq_toggle_synonym_streak(callback: CallbackQuery):
+    try:
+        new_val = await db.toggle_synonym_streak(callback.from_user.id)
+        status = "ON 🔄" if new_val else "OFF 🔄"
+        await callback.answer(f"Synonym Streak {status}", show_alert=False)
+        user = await db.get_or_create_user(callback.from_user.id)
+        notif     = user.get("notifications_enabled", True)
+        recasting = user.get("recasting_enabled", False)
+        practice  = user.get("mistakes_practice_enabled", False)
+        await safe_edit_reply_markup(
+            callback.message,
+            reply_markup=get_settings_keyboard(notif, recasting, practice, new_val, callback.from_user.id)
+        )
+    except Exception as e:
+        logger.error(f"Error toggling synonym streak: {e}")
+        await callback.answer("Error.", show_alert=True)
+
+# ─── Paywall ──────────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "upgrade")
+async def cq_upgrade(callback: CallbackQuery):
+    """Кнопка 'Upgrade' из любого места — показывает выбор тарифа."""
+    try:
+        user = await db.get_or_create_user(callback.from_user.id)
+        plan = user.get("subscription_plan", "free")
+        await safe_edit_text(
+            callback.message,
+            "⭐ <b>Upgrade Speech Flow Pro</b>\n\n"
+            "<b>Standard</b>\n"
+            "• 30 messages/day\n"
+            "• All 6 characters\n"
+            "• Recasting + Session Summary\n\n"
+            "<b>Pro</b>\n"
+            "• Unlimited messages\n"
+            "• All Standard features\n"
+            "• Synonym Streak + Drop-in Talks",
+            parse_mode="HTML",
+            reply_markup=get_paywall_keyboard(plan)
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in upgrade: {e}")
+        await callback.answer("Error.", show_alert=True)
+
+@router.callback_query(F.data.startswith("paywall_plan_"))
+async def cq_paywall_plan(callback: CallbackQuery):
+    """Пользователь выбрал тариф — показываем выбор периода."""
+    try:
+        plan = callback.data.replace("paywall_plan_", "")
+        plan_names = {"standard": "Standard ⭐", "pro": "Pro 🌟"}
+        await safe_edit_text(
+            callback.message,
+            f"<b>{plan_names.get(plan, plan)}</b>\n\nChoose your billing period:",
+            parse_mode="HTML",
+            reply_markup=get_paywall_period_keyboard(plan)
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in paywall plan: {e}")
+        await callback.answer("Error.", show_alert=True)
+
+@router.callback_query(F.data == "paywall_back")
+async def cq_paywall_back(callback: CallbackQuery):
+    """Назад к выбору тарифа."""
+    try:
+        user = await db.get_or_create_user(callback.from_user.id)
+        plan = user.get("subscription_plan", "free")
+        await safe_edit_text(
+            callback.message,
+            "⭐ <b>Upgrade Speech Flow Pro</b>\n\n"
+            "<b>Standard</b>\n"
+            "• 30 messages/day\n"
+            "• All 6 characters\n"
+            "• Recasting + Session Summary\n\n"
+            "<b>Pro</b>\n"
+            "• Unlimited messages\n"
+            "• All Standard features\n"
+            "• Synonym Streak + Drop-in Talks",
+            parse_mode="HTML",
+            reply_markup=get_paywall_keyboard(plan)
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in paywall back: {e}")
+
+@router.callback_query(F.data.startswith("paywall_buy_"))
+async def cq_paywall_buy(callback: CallbackQuery):
+    """Инициирует платёж через Telegram Stars."""
+    try:
+        from src.config import STARS_PRICES
+        parts = callback.data.split("_")  # paywall_buy_standard_week
+        plan   = parts[2]
+        period = parts[3]
+        prices = STARS_PRICES.get(plan, {})
+        amount = prices.get(period, 0)
+        if not amount:
+            await callback.answer("Price not found.", show_alert=True)
+            return
+
+        plan_names   = {"standard": "Standard", "pro": "Pro"}
+        period_names = {"week": "1 week", "month": "1 month"}
+
+        await callback.message.answer_invoice(
+            title=f"Speech Flow Pro — {plan_names.get(plan, plan)}",
+            description=f"{period_names.get(period, period)} subscription to Speech Flow Pro {plan_names.get(plan, plan)}",
+            payload=f"sub_{plan}_{period}",
+            currency="XTR",           # Telegram Stars
+            prices=[{"label": f"{plan_names.get(plan)} {period_names.get(period)}", "amount": amount}],
+            provider_token="",         # пустой для Stars
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in paywall buy: {e}")
+        await callback.answer("Payment error. Try again.", show_alert=True)
+
+@router.pre_checkout_query()
+async def pre_checkout(query):
+    """Обязательный хендлер — подтверждаем оплату."""
+    await query.answer(ok=True)
+
+@router.message(F.successful_payment)
+async def successful_payment(message: Message):
+    """Пользователь оплатил — активируем подписку."""
+    try:
+        payload = message.successful_payment.invoice_payload  # sub_standard_week
+        parts = payload.split("_")
+        plan   = parts[1]
+        period = parts[2]
+        await db.activate_subscription(message.from_user.id, plan, period)
+        plan_names   = {"standard": "Standard ⭐", "pro": "Pro 🌟"}
+        period_names = {"week": "1 week", "month": "1 month"}
+        await message.answer(
+            f"🎉 <b>Welcome to {plan_names.get(plan, plan)}!</b>\n\n"
+            f"Your subscription is active for {period_names.get(period, period)}.\n"
+            f"Enjoy unlimited conversations!",
+            parse_mode="HTML",
+            reply_markup=get_paywall_success_keyboard()
+        )
+    except Exception as e:
+        logger.error(f"Error in successful_payment: {e}")
 
 @router.callback_query(F.data == "back_to_menu")
 async def back_to_menu(callback: CallbackQuery):
@@ -441,14 +597,15 @@ async def show_admin_user_card(callback: CallbackQuery):
 async def back_to_settings(callback: CallbackQuery):
     try:
         user = await db.get_or_create_user(callback.from_user.id)
-        notif = user.get("notifications_enabled", True)
+        notif     = user.get("notifications_enabled", True)
         recasting = user.get("recasting_enabled", False)
-        practice = user.get("mistakes_practice_enabled", False)
+        practice  = user.get("mistakes_practice_enabled", False)
+        streak    = user.get("synonym_streak_enabled", False)
         await safe_edit_text(
             callback.message,
             "⚙️ <b>Settings</b>",
             parse_mode="HTML",
-            reply_markup=get_settings_keyboard(notif, recasting, practice, callback.from_user.id)
+            reply_markup=get_settings_keyboard(notif, recasting, practice, streak, callback.from_user.id)
         )
         await callback.answer()
     except Exception as e:

@@ -1,3 +1,7 @@
+# CHANGELOG: 2026-07-16
+# - OnboardingState: добавлены waiting_name, confirming_english_name, choosing_goal
+# - PaywallState: новые состояния для Telegram Stars
+
 """
 SpeechFlow Pro — FSM States
 Shared across handlers to avoid circular imports.
@@ -20,9 +24,16 @@ class TutorState(StatesGroup):
 
 
 class OnboardingState(StatesGroup):
-    waiting_level = State()       # показали приветствие, ждём выбор уровня
-    choosing_mode = State()       # показали голосовое уровня, ждём выбор режима
+    waiting_name            = State()  # просим ввести имя
+    confirming_english_name = State()  # предлагаем английский вариант имени
+    choosing_goal           = State()  # выбор цели обучения
+    waiting_level           = State()  # выбор уровня
+    choosing_mode           = State()  # выбор режима
 
 
 class LevelChangeState(StatesGroup):
-    choosing_level = State()   # пользователь нажал "Сменить уровень"
+    choosing_level = State()
+
+
+class PaywallState(StatesGroup):
+    choosing_plan = State()   # пользователь выбирает тариф

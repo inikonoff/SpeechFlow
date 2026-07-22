@@ -30,6 +30,8 @@ from src.bot.keyboards import (
     get_persona_keyboard,
     get_mode_keyboard,
     get_penfriend_keyboard,
+
+    get_session_summary_keyboard,
 )
 from src.modes import MODE_TUTOR, MODE_PENFRIEND, MODE_FLOW
 from src.utils.tg_helpers import safe_edit_text, safe_edit_reply_markup, safe_edit_caption
@@ -248,7 +250,185 @@ async def _run_level_assessment(user_id: int, current_level: str, message: Messa
     except Exception as e:
         logger.error(f"Error in _run_level_assessment for user {user_id}: {e}")
 
+# ─── Synonym Streak ─────────────────────────────────────────────
+
+_synonym_history: dict = {}  # user_id → {word: count}
+
+async def _check_synonym_streak(user_id: int, user_text: str, message) -> None:
+    """Synonym Streak: предлагает синоним при 3+ повторах слова."""
+    try:
+        words = [
+            w.lower().strip().strip(".,!?;:()")
+            for w in user_text.split()
+            if len(w) > 4
+        ]
+        words = [w for w in words if w]
+        if not words:
+            return
+
+        if user_id not in _synonym_history:
+            _synonym_history[user_id] = {}
+
+        history = _synonym_history[user_id]
+        repeated = []
+        for word in set(words):
+            history[word] = history.get(word, 0) + 1
+            if history[word] == 3:
+                repeated.append(word)
+
+        if not repeated:
+            return
+
+        word = repeated[0]
+        suggestion = await groq_client.suggest_synonym(word)
+        if not suggestion:
+            return
+
+        safe_word = html.escape(word)
+        safe_sug  = html.escape(suggestion)
+        await message.answer(
+            f"📚 <i>Mrs. Smith noticed:</i> You've used <b>{safe_word}</b> a few times. "
+            f"Try <b>{safe_sug}</b> next time — it adds variety to your speech!",
+            parse_mode="HTML"
+        )
+
+    except Exception as e:
+        logger.error(f"Error in _check_synonym_streak: {e}")
+
+
+# ─── Лимит сообщений ─────────────────────────────────────────────────────────
+
+
+async def _show_limit_reached(message, limit_info: dict) -> None:
+    """Показывает сообщение о достижении лимита с кнопками Summary и PenFriend."""
+    from src.bot.keyboards import get_session_summary_keyboard, get_paywall_keyboard
+    plan  = limit_info.get("plan", "free")
+    limit = limit_info.get("limit", 10)
+
+    if plan == "free":
+        text = (
+            f"You've used all <b>{limit}</b> free messages today. 🎯\n\n"
+            f"Upgrade to continue — or come back tomorrow.\n\n"
+            f"You can also download your <b>Session Summary</b> below."
+        )
+        kb = get_paywall_keyboard(plan)
+    else:
+        text = (
+            f"You've reached your daily limit of <b>{limit}</b> messages. 🎯\n\n"
+            f"Your limit resets at midnight UTC.\n\n"
+            f"Get your <b>Session Summary</b> while you wait."
+        )
+        kb = get_session_summary_keyboard()
+
+    await message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+
+# ─── Session Summary ──────────────────────────────────────────────────────────
+
+async def _generate_session_summary_pdf(user_id: int, messages: list) -> bytes:
+    """Генерирует PDF с транскриптом и LLM анализом сессии."""
+    try:
+        import io
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import cm
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
+        from reportlab.lib.enums import TA_CENTER
+        from reportlab.lib import colors
+        from datetime import datetime
+
+        analysis = await groq_client.generate_session_analysis(messages)
+
+        buf = io.BytesIO()
+        doc = SimpleDocTemplate(buf, pagesize=A4,
+            leftMargin=2*cm, rightMargin=2*cm,
+            topMargin=2*cm, bottomMargin=2*cm)
+
+        styles = getSampleStyleSheet()
+        title_style   = ParagraphStyle('Title2',   parent=styles['Title'],
+                            fontSize=16, spaceAfter=6, alignment=TA_CENTER)
+        subtitle_style = ParagraphStyle('Sub',     parent=styles['Normal'],
+                            fontSize=10, textColor=colors.grey, alignment=TA_CENTER, spaceAfter=16)
+        section_style = ParagraphStyle('Sec',      parent=styles['Heading2'],
+                            fontSize=12, spaceBefore=12, spaceAfter=6,
+                            textColor=colors.HexColor('#1a1a2e'))
+        user_style    = ParagraphStyle('User',     parent=styles['Normal'],
+                            fontSize=10, spaceAfter=4,
+                            textColor=colors.HexColor('#2d5986'))
+        bot_style     = ParagraphStyle('Bot',      parent=styles['Normal'],
+                            fontSize=10, leftIndent=20, spaceAfter=8)
+        analysis_style = ParagraphStyle('Ana',     parent=styles['Normal'],
+                            fontSize=10, spaceAfter=6, leading=14)
+
+        def esc(t): return t.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+
+        story = [
+            Paragraph("Speech Flow Pro", title_style),
+            Paragraph(f"Session Summary · {datetime.utcnow().strftime('%B %d, %Y')}", subtitle_style),
+            HRFlowable(width="100%", thickness=1, color=colors.lightgrey),
+            Spacer(1, 12),
+            Paragraph("Transcript", section_style),
+        ]
+
+        for msg in messages:
+            role = msg.get("role", "")
+            text = esc(msg.get("content", ""))
+            if role == "user":
+                story.append(Paragraph(f"<b>You:</b> {text}", user_style))
+            elif role == "assistant":
+                story.append(Paragraph(f"<b>Mrs. Smith:</b> {text}", bot_style))
+
+        story += [
+            Spacer(1, 12),
+            HRFlowable(width="100%", thickness=1, color=colors.lightgrey),
+            Spacer(1, 12),
+            Paragraph("Session Analysis", section_style),
+        ]
+        for line in analysis.split("\n"):
+            if line.strip():
+                story.append(Paragraph(esc(line), analysis_style))
+
+        doc.build(story)
+        return buf.getvalue()
+
+    except Exception as e:
+        logger.error(f"Error generating session PDF: {e}")
+        return None
+
+
+@router.callback_query(F.data == "session_summary")
+async def cq_session_summary(callback: CallbackQuery, state: FSMContext):
+    """Генерирует и отправляет PDF сессии."""
+    try:
+        user_id = callback.from_user.id
+        await callback.answer()
+        await callback.message.answer("Generating your Session Summary...")
+
+        messages = await db.get_messages_for_summary(user_id, limit=50)
+        if not messages:
+            await callback.message.answer("No messages to summarize yet.")
+            return
+
+        pdf_bytes = await _generate_session_summary_pdf(user_id, messages)
+        if not pdf_bytes:
+            await callback.message.answer("Failed to generate PDF. Please try again.")
+            return
+
+        from aiogram.types import BufferedInputFile
+        from datetime import datetime
+        filename = f"session_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.pdf"
+        await callback.message.answer_document(
+            BufferedInputFile(pdf_bytes, filename=filename),
+            caption="Your Session Summary is ready!"
+        )
+
+    except Exception as e:
+        logger.error(f"Error in session_summary: {e}")
+        await callback.message.answer("Something went wrong.")
+
+
 # ─── Mode activation ──────────────────────────────────────────────────────────
+
 
 @router.message(F.text == "🎙 Flow")
 async def activate_flow(message: Message, state: FSMContext):
@@ -460,6 +640,15 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
             return
 
         user_level = user.get("level", settings.DEFAULT_USER_LEVEL)
+
+        # ─── Проверка лимита сообщений ────────────────────────────────────────
+        if user_id not in ADMIN_IDS:
+            limit_info = await db.check_message_limit(user_id)
+            if not limit_info["allowed"]:
+                await _show_limit_reached(message, limit_info)
+                return
+            await db.increment_daily_messages(user_id)
+
         await db.save_message(user_id, "user", user_text)
 
         # Юзер вернулся — сбрасываем счётчик re-engagement фоново
@@ -647,10 +836,13 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
             user = await db.get_or_create_user(user_id)
             is_admin = user_id in ADMIN_IDS
 
-        if not is_admin and settings.FREE_MESSAGES_LIMIT > 0:
-            if user.get("free_messages_used", 0) >= settings.FREE_MESSAGES_LIMIT:
-                await message.answer("You've reached your message limit. Please upgrade.")
+        # ─── Проверка лимита сообщений ────────────────────────────────────────
+        if not is_admin:
+            limit_info = await db.check_message_limit(user_id)
+            if not limit_info["allowed"]:
+                await _show_limit_reached(message, limit_info)
                 return
+            await db.increment_daily_messages(user_id)
 
         if message.voice:
             is_voice_input = True
@@ -710,6 +902,13 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
         )
 
         await message.bot.send_chat_action(user_id, "typing")
+
+        # ─── Synonym Streak (только в Tutor с Mrs. Smith) ─────────────────────
+        streak_note = ""
+        if user.get("synonym_streak_enabled") and user.get("persona", "") == "mrs_smith":
+            asyncio.create_task(
+                _check_synonym_streak(user_id, user_text, message)
+            )
 
         # Два LLM параллельно: ответ + коррекция
         tutor_practice_error = None
