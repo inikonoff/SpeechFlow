@@ -1,7 +1,7 @@
 # CHANGELOG: 2026-07-16
 # - suggest_english_name: новый метод — предлагает английский эквивалент имени (Илья→Elijah)
 # - generate_persona_greeting: добавлен параметр user_name — персонаж обращается по имени
-# - Все модели заменены с llama-4-scout-17b-16e-instruct на qwen/qwen3.6-27b
+# - Все модели заменены с llama-4-scout-17b-16e-instruct на openai/gpt-oss-120b
 
 # CHANGELOG: 2026-04-12
 # - generate_penfriend_multibubble: response_format json_object возвращён
@@ -175,8 +175,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _correct(client):
             response = await client.chat.completions.create(
-                model="qwen/qwen3.6-27b",
-                extra_body={"reasoning_format": "none"},
+                model="openai/gpt-oss-120b",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"USER TEXT: {text}\n\nAnalyze and correct."}
@@ -261,8 +260,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _flow(client):
             response = await client.chat.completions.create(
-                model="qwen/qwen3.6-27b",
-                extra_body={"reasoning_format": "none"},
+                model="openai/gpt-oss-120b",
                 messages=messages,
                 temperature=0.9,
                 max_tokens=300
@@ -322,8 +320,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _penfriend(client):
             response = await client.chat.completions.create(
-                model="qwen/qwen3.6-27b",
-                extra_body={"reasoning_format": "none"},
+                model="openai/gpt-oss-120b",
                 messages=messages,
                 temperature=0.85,
                 max_tokens=200
@@ -358,8 +355,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _opener(client):
             response = await client.chat.completions.create(
-                model="qwen/qwen3.6-27b",
-                extra_body={"reasoning_format": "none"},
+                model="openai/gpt-oss-120b",
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": "[start the conversation]"}
@@ -415,8 +411,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _greeting(client):
             response = await client.chat.completions.create(
-                model="qwen/qwen3.6-27b",
-                extra_body={"reasoning_format": "none"},
+                model="openai/gpt-oss-120b",
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": context_instruction}
@@ -437,8 +432,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
     async def detect_farewell(self, text: str) -> bool:
         async def _detect(client):
             response = await client.chat.completions.create(
-                model="qwen/qwen3.6-27b",
-                extra_body={"reasoning_format": "none"},
+                model="openai/gpt-oss-120b",
                 messages=[
                     {
                         "role": "system",
@@ -483,8 +477,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _summarize(client):
             response = await client.chat.completions.create(
-                model="qwen/qwen3.6-27b",
-                extra_body={"reasoning_format": "none"},
+                model="openai/gpt-oss-120b",
                 messages=[
                     {
                         "role": "system",
@@ -519,8 +512,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _merge(client):
             response = await client.chat.completions.create(
-                model="qwen/qwen3.6-27b",
-                extra_body={"reasoning_format": "none"},
+                model="openai/gpt-oss-120b",
                 messages=[
                     {
                         "role": "system",
@@ -592,8 +584,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _deep_dive(client):
             response = await client.chat.completions.create(
-                model="qwen/qwen3.6-27b",
-                extra_body={"reasoning_format": "none"},
+                model="openai/gpt-oss-120b",
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": data_summary}
@@ -675,8 +666,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _sunday(client):
             response = await client.chat.completions.create(
-                model="qwen/qwen3.6-27b",
-                extra_body={"reasoning_format": "none"},
+                model="openai/gpt-oss-120b",
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": "[write the deep dive]"}
@@ -808,8 +798,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _notify(client):
             response = await client.chat.completions.create(
-                model="qwen/qwen3.6-27b",
-                extra_body={"reasoning_format": "none"},
+                model="openai/gpt-oss-120b",
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": "[write the message]"}
@@ -841,8 +830,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _translate(client):
             response = await client.chat.completions.create(
-                model="qwen/qwen3.6-27b",
-                extra_body={"reasoning_format": "none"},
+                model="openai/gpt-oss-120b",
                 messages=[
                     {
                         "role": "system",
@@ -951,8 +939,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _chat(client):
             response = await client.chat.completions.create(
-                model="qwen/qwen3.6-27b",
-                extra_body={"reasoning_format": "none"},
+                model="openai/gpt-oss-120b",
                 messages=messages,
                 temperature=0.75,
                 max_tokens=300
@@ -1039,8 +1026,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _react(client):
             response = await client.chat.completions.create(
-                model="qwen/qwen3.6-27b",
-                extra_body={"reasoning_format": "none"},
+                model="openai/gpt-oss-120b",
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user",   "content": user_msg},
@@ -1146,8 +1132,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _multibubble(client):
             response = await client.chat.completions.create(
-                model="qwen/qwen3.6-27b",
-                extra_body={"reasoning_format": "none"},
+                model="openai/gpt-oss-120b",
                 messages=messages,
                 temperature=0.85,
                 max_tokens=300,
@@ -1225,8 +1210,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _assess(client):
             response = await client.chat.completions.create(
-                model="qwen/qwen3.6-27b",
-                extra_body={"reasoning_format": "none"},
+                model="openai/gpt-oss-120b",
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user",   "content": f"Current declared level: {current_level}\n\nMessages:\n{sample}"},
@@ -1275,8 +1259,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _analyze(client):
             response = await client.chat.completions.create(
-                model="qwen/qwen3.6-27b",
-                extra_body={"reasoning_format": "none"},
+                model="openai/gpt-oss-120b",
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user",   "content": f"Student messages from this session:\n{sample}"},
@@ -1296,8 +1279,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         """Предлагает один синоним для слова. Используется в Synonym Streak."""
         async def _syn(client):
             response = await client.chat.completions.create(
-                model="qwen/qwen3.6-27b",
-                extra_body={"reasoning_format": "none"},
+                model="openai/gpt-oss-120b",
                 messages=[
                     {"role": "system", "content": (
                         "You suggest a single English synonym for the given word.\n"
@@ -1343,8 +1325,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         async def _suggest(client):
             response = await client.chat.completions.create(
-                model="qwen/qwen3.6-27b",
-                extra_body={"reasoning_format": "none"},
+                model="openai/gpt-oss-120b",
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user",   "content": name},
