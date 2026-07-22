@@ -1,3 +1,9 @@
+# CHANGELOG: 2026-07-16
+# - Тарифная система: free/standard/pro с лимитами сообщений
+# - STARS_PRICES: цены в Telegram Stars по периодам
+# - DAILY_MESSAGE_LIMITS: лимиты сообщений по тарифам
+# - SUBSCRIPTION_FEATURES: какие фичи доступны на каждом тарифе
+
 from pydantic_settings import BaseSettings
 from typing import List, Optional
 import os
@@ -50,16 +56,63 @@ def get_admin_ids() -> List[int]:
 
 ADMIN_IDS = get_admin_ids()
 
-SUBSCRIPTION_PLANS = ("standard", "plus", "pro")
+# ─── Тарифные планы ──────────────────────────────────────────────────────────
 
-DAILY_VOICE_LIMITS: dict = {
-    "standard": 5,
-    "plus": 10,
-    "pro": 20,
+SUBSCRIPTION_PLANS = ("free", "standard", "pro")
+
+# Лимиты сообщений в день по тарифам
+DAILY_MESSAGE_LIMITS: dict = {
+    "free":     10,
+    "standard": 30,
+    "pro":      0,   # 0 = безлимит
 }
 
-def get_daily_voice_limit(subscription_plan: str) -> int:
-    return DAILY_VOICE_LIMITS.get(subscription_plan, DAILY_VOICE_LIMITS["standard"])
+# Цены в Telegram Stars (1 Star ≈ $0.013)
+# Периоды: week / month
+STARS_PRICES: dict = {
+    "standard": {
+        "week":  150,   # ~$2
+        "month": 500,   # ~$6.5
+    },
+    "pro": {
+        "week":  350,   # ~$4.5
+        "month": 1100,  # ~$14
+    },
+}
+
+# Фичи по тарифам
+SUBSCRIPTION_FEATURES: dict = {
+    "free": {
+        "personas":       ["mrs_smith"],
+        "recasting":      False,
+        "synonym_streak": False,
+        "session_summary": False,
+        "drop_in_talks":  False,
+    },
+    "standard": {
+        "personas":       ["mrs_smith", "greg", "mark", "junior", "summer", "jane"],
+        "recasting":      True,
+        "synonym_streak": False,
+        "session_summary": True,
+        "drop_in_talks":  False,
+    },
+    "pro": {
+        "personas":       ["mrs_smith", "greg", "mark", "junior", "summer", "jane"],
+        "recasting":      True,
+        "synonym_streak": True,
+        "session_summary": True,
+        "drop_in_talks":  True,
+    },
+}
+
+def get_daily_message_limit(plan: str) -> int:
+    return DAILY_MESSAGE_LIMITS.get(plan, DAILY_MESSAGE_LIMITS["free"])
+
+def has_feature(plan: str, feature: str) -> bool:
+    return SUBSCRIPTION_FEATURES.get(plan, SUBSCRIPTION_FEATURES["free"]).get(feature, False)
+
+def get_available_personas(plan: str) -> list:
+    return SUBSCRIPTION_FEATURES.get(plan, SUBSCRIPTION_FEATURES["free"]).get("personas", ["mrs_smith"])
 
 
 # ─── Онбординг: file_id голосовых Mrs. Smith ──────────────────────────────────
