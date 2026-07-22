@@ -1,3 +1,9 @@
+# CHANGELOG: 2026-07-16
+# - get_settings_keyboard: добавлен synonym_streak_enabled параметр и кнопка
+# - get_paywall_keyboard: выбор тарифа (standard/pro)
+# - get_paywall_period_keyboard: выбор периода (week/month) с ценами в Stars
+# - get_session_summary_keyboard: кнопка экспорта сессии в PDF
+
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from src.config import ADMIN_IDS
@@ -81,15 +87,23 @@ def get_admin_user_card_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def get_settings_keyboard(notifications_enabled: bool, recasting_enabled: bool, mistakes_practice_enabled: bool = False, user_id: int = 0) -> InlineKeyboardMarkup:
+def get_settings_keyboard(
+    notifications_enabled: bool,
+    recasting_enabled: bool,
+    mistakes_practice_enabled: bool = False,
+    synonym_streak_enabled: bool = False,
+    user_id: int = 0
+) -> InlineKeyboardMarkup:
     notif_text    = "🔔 Notifications: ON"      if notifications_enabled      else "🔕 Notifications: OFF"
     recast_text   = "📝 Recasting: ON"          if recasting_enabled          else "📝 Recasting: OFF"
     practice_text = "🎯 Mistakes Practice: ON"  if mistakes_practice_enabled  else "🎯 Mistakes Practice: OFF"
+    streak_text   = "🔄 Synonym Streak: ON"     if synonym_streak_enabled     else "🔄 Synonym Streak: OFF"
 
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text=notif_text,    callback_data="toggle_notifications"))
     builder.row(InlineKeyboardButton(text=recast_text,   callback_data="toggle_recasting"))
     builder.row(InlineKeyboardButton(text=practice_text, callback_data="toggle_mistakes_practice"))
+    builder.row(InlineKeyboardButton(text=streak_text,   callback_data="toggle_synonym_streak"))
     if user_id in ADMIN_IDS:
         builder.row(InlineKeyboardButton(text="🔧 Админ-панель", callback_data="admin_panel"))
     builder.row(InlineKeyboardButton(text="← Back", callback_data="back_to_menu"))
@@ -145,6 +159,70 @@ def get_translate_keyboard(message_id: int) -> InlineKeyboardMarkup:
 def get_original_keyboard(message_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="🔤 Original", callback_data=f"original_{message_id}"))
+    return builder.as_markup()
+
+
+# ─── Paywall ─────────────────────────────────────────────────────────────────
+
+def get_paywall_keyboard(current_plan: str = "free") -> InlineKeyboardMarkup:
+    """Выбор тарифного плана."""
+    from src.config import STARS_PRICES
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="⭐ Standard" + (" ✓" if current_plan == "standard" else ""),
+            callback_data="paywall_plan_standard"
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="🌟 Pro" + (" ✓" if current_plan == "pro" else ""),
+            callback_data="paywall_plan_pro"
+        )
+    )
+    builder.row(InlineKeyboardButton(text="← Back", callback_data="back_to_menu"))
+    return builder.as_markup()
+
+
+def get_paywall_period_keyboard(plan: str) -> InlineKeyboardMarkup:
+    """Выбор периода подписки с ценами в Stars."""
+    from src.config import STARS_PRICES
+    prices = STARS_PRICES.get(plan, {})
+    week_price  = prices.get("week", 0)
+    month_price = prices.get("month", 0)
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text=f"📅 1 week — {week_price} ⭐",
+            callback_data=f"paywall_buy_{plan}_week"
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text=f"📆 1 month — {month_price} ⭐",
+            callback_data=f"paywall_buy_{plan}_month"
+        )
+    )
+    builder.row(InlineKeyboardButton(text="← Back", callback_data="paywall_back"))
+    return builder.as_markup()
+
+
+def get_paywall_success_keyboard() -> InlineKeyboardMarkup:
+    """После успешной оплаты."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="🎉 Start talking!", callback_data="back_to_menu"))
+    return builder.as_markup()
+
+
+# ─── Session Summary ──────────────────────────────────────────────────────────
+
+def get_session_summary_keyboard() -> InlineKeyboardMarkup:
+    """Кнопка под последним сообщением сессии при достижении лимита."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="📄 Session Summary", callback_data="session_summary"),
+        InlineKeyboardButton(text="✉️ PenFriend",       callback_data="switch_to_penfriend"),
+    )
     return builder.as_markup()
 
 
