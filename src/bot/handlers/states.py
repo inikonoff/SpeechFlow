@@ -23,6 +23,11 @@ class TutorState(StatesGroup):
     awaiting_drill = State()   # ждём повтор после коррекции
 
 
+class SynonymStreakState(StatesGroup):
+    awaiting_word    = State()  # ждём слово, с которым нужна помощь
+    awaiting_attempt = State()  # ждём попытку юзера использовать синоним
+
+
 class OnboardingState(StatesGroup):
     waiting_name            = State()  # просим ввести имя
     confirming_english_name = State()  # предлагаем английский вариант имени
