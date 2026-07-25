@@ -9,10 +9,10 @@ import re
 from aiogram import Router, F
 from aiogram.types import Message, BufferedInputFile, CallbackQuery
 from aiogram.fsm.context import FSMContext
-from src.bot.handlers.states import FlowState
+from src.bot.handlers.states import FlowState, SynonymStreakState
 from typing import Dict, Any
 
-from src.config import settings, ADMIN_IDS
+from src.config import settings, ADMIN_IDS, has_feature
 from src.services.supabase_db import db
 from src.services.groq_client import groq_client
 from src.utils.audio import save_voice_file, cleanup_file, read_file_bytes
@@ -30,7 +30,8 @@ from src.bot.keyboards import (
     get_persona_keyboard,
     get_mode_keyboard,
     get_penfriend_keyboard,
-
+    get_synonym_streak_keyboard,
+    get_paywall_keyboard,
     get_session_summary_keyboard,
 )
 from src.modes import MODE_TUTOR, MODE_PENFRIEND, MODE_FLOW
@@ -46,8 +47,9 @@ _display_cache: Dict[int, str] = {}  # HTML-версия с <b> для пока�
 _translation_cache: Dict[int, str] = {}  # кэш переводов
 SUMMARY_MERGE_THRESHOLD = 4
 BUTTON_TEXTS = {
-    "🎓 Tutor", "✉️ PenFriend", "🎙 Flow",
-    "⏹ Stop Flow", "⏹ Stop Tutor", "⏹ Stop PenFriend", "↩ Switch"
+    "🎓 Tutor", "✉️ PenFriend", "🎙 Flow", "🔄 Synonym Streak",
+    "⏹ Stop Flow", "⏹ Stop Tutor", "⏹ Stop PenFriend", "↩ Switch",
+    "⏹ Stop Synonym Streak", "🔄 New word",
 }
 
 _persona_display_cache: Dict[int, str] = {}
@@ -250,52 +252,6 @@ async def _run_level_assessment(user_id: int, current_level: str, message: Messa
     except Exception as e:
         logger.error(f"Error in _run_level_assessment for user {user_id}: {e}")
 
-# ─── Synonym Streak ─────────────────────────────────────────────
-
-_synonym_history: dict = {}  # user_id → {word: count}
-
-async def _check_synonym_streak(user_id: int, user_text: str, message) -> None:
-    """Synonym Streak: предлагает синоним при 3+ повторах слова."""
-    try:
-        words = [
-            w.lower().strip().strip(".,!?;:()")
-            for w in user_text.split()
-            if len(w) > 4
-        ]
-        words = [w for w in words if w]
-        if not words:
-            return
-
-        if user_id not in _synonym_history:
-            _synonym_history[user_id] = {}
-
-        history = _synonym_history[user_id]
-        repeated = []
-        for word in set(words):
-            history[word] = history.get(word, 0) + 1
-            if history[word] == 3:
-                repeated.append(word)
-
-        if not repeated:
-            return
-
-        word = repeated[0]
-        suggestion = await groq_client.suggest_synonym(word)
-        if not suggestion:
-            return
-
-        safe_word = html.escape(word)
-        safe_sug  = html.escape(suggestion)
-        await message.answer(
-            f"📚 <i>Mrs. Smith noticed:</i> You've used <b>{safe_word}</b> a few times. "
-            f"Try <b>{safe_sug}</b> next time — it adds variety to your speech!",
-            parse_mode="HTML"
-        )
-
-    except Exception as e:
-        logger.error(f"Error in _check_synonym_streak: {e}")
-
-
 # ─── Лимит сообщений ─────────────────────────────────────────────────────────
 
 
@@ -474,6 +430,160 @@ async def activate_penfriend(message: Message, state: FSMContext):
 async def deactivate_penfriend(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("⏹ PenFriend Mode off", reply_markup=get_mode_keyboard())
+
+# ─── Synonym Streak (active) ───────────────────────────────────────────────
+# Ping-pong с Mrs. Smith: юзер называет слово → получает синонимы с примерами →
+# пробует использовать один из них в своём предложении → мягкий фидбек.
+
+@router.message(F.text == "🔄 Synonym Streak")
+async def activate_synonym_streak(message: Message, state: FSMContext):
+    try:
+        user_id = message.from_user.id
+        user = await db.get_or_create_user(user_id)
+        plan = user.get("subscription_plan", "free")
+
+        if not has_feature(plan, "synonym_streak"):
+            await message.answer(
+                "🔄 <b>Synonym Streak</b> is a Pro feature — Mrs. Smith helps you find "
+                "and practice synonyms on demand.\n\nUpgrade to unlock it.",
+                parse_mode="HTML",
+                reply_markup=get_paywall_keyboard(plan)
+            )
+            return
+
+        await state.clear()
+        await state.set_state(SynonymStreakState.awaiting_word)
+        await message.answer(
+            "📚 Which word would you like synonyms for? Just send it — "
+            "or ask me like <i>\"help me with the word 'interesting'\"</i>.",
+            parse_mode="HTML",
+            reply_markup=get_synonym_streak_keyboard()
+        )
+    except Exception as e:
+        logger.error(f"Error in activate_synonym_streak: {e}")
+        await message.answer("Something went wrong.")
+
+@router.message(F.text == "⏹ Stop Synonym Streak")
+async def deactivate_synonym_streak(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("⏹ Synonym Streak off", reply_markup=get_mode_keyboard())
+
+@router.message(F.text == "🔄 New word")
+async def synonym_streak_new_word(message: Message, state: FSMContext):
+    await state.set_state(SynonymStreakState.awaiting_word)
+    await message.answer("📚 Which word next?", reply_markup=get_synonym_streak_keyboard())
+
+@router.message(SynonymStreakState.awaiting_word)
+async def synonym_streak_word(message: Message, state: FSMContext, user: Dict[str, Any] = None):
+    """Юзер назвал слово (текстом или голосом) — Mrs. Smith даёт синонимы с примерами."""
+    try:
+        user_id = message.from_user.id
+        if user is None:
+            user = await db.get_or_create_user(user_id)
+
+        if message.voice:
+            await message.bot.send_chat_action(user_id, "record_voice")
+            voice_file = await message.bot.get_file(message.voice.file_id)
+            voice_bytes = await message.bot.download_file(voice_file.file_path)
+            user_text = await transcribe_voice_with_groq(voice_bytes.read())
+            if not user_text or user_text.startswith("[Transcription error"):
+                await message.answer("Could not transcribe your voice message. Please try again.")
+                return
+        elif message.text:
+            user_text = message.text.strip()
+            if not user_text or user_text.startswith("/") or user_text in BUTTON_TEXTS:
+                return
+        else:
+            await message.answer(
+                "Send me the word as text or voice — for example: "
+                "\"help me with the word 'interesting'\"."
+            )
+            return
+
+        await message.bot.send_chat_action(user_id, "typing")
+        level = user.get("level", settings.DEFAULT_USER_LEVEL)
+        lesson = await groq_client.generate_synonym_lesson(user_text, level)
+
+        word = (lesson.get("word") or "").strip()
+        synonyms = lesson.get("synonyms") or []
+
+        if not word or not synonyms:
+            await message.answer(
+                "Hmm, I'm not sure which word you meant. Try something like: "
+                "\"help me with the word 'interesting'\"."
+            )
+            return
+
+        intro = (lesson.get("intro") or "").strip()
+        lines = [html.escape(intro)] if intro else []
+        for item in synonyms[:3]:
+            syn = html.escape(str(item.get("synonym", "")).strip())
+            example = html.escape(str(item.get("example", "")).strip())
+            if not syn:
+                continue
+            lines.append(f"• <b>{syn}</b> — {example}" if example else f"• <b>{syn}</b>")
+        lines.append(f"\nNow try using one of these for <b>{html.escape(word)}</b> in your own sentence.")
+
+        await message.answer(
+            "📚 " + "\n".join(lines),
+            parse_mode="HTML",
+            reply_markup=get_synonym_streak_keyboard()
+        )
+
+        await state.update_data(
+            synonym_word=word,
+            synonym_options=[str(s.get("synonym", "")).strip() for s in synonyms if s.get("synonym")],
+        )
+        await state.set_state(SynonymStreakState.awaiting_attempt)
+
+    except Exception as e:
+        logger.error(f"Error in synonym_streak_word: {e}")
+        await message.answer("Something went wrong. Try again?")
+
+@router.message(SynonymStreakState.awaiting_attempt)
+async def synonym_streak_attempt(message: Message, state: FSMContext, user: Dict[str, Any] = None):
+    """Юзер попробовал использовать синоним — мягкая проверка + фидбек от Mrs. Smith."""
+    try:
+        user_id = message.from_user.id
+        if user is None:
+            user = await db.get_or_create_user(user_id)
+
+        if message.voice:
+            await message.bot.send_chat_action(user_id, "record_voice")
+            voice_file = await message.bot.get_file(message.voice.file_id)
+            voice_bytes = await message.bot.download_file(voice_file.file_path)
+            attempt_text = await transcribe_voice_with_groq(voice_bytes.read())
+            if not attempt_text or attempt_text.startswith("[Transcription error"):
+                await message.answer("Could not transcribe your voice message. Please try again.")
+                return
+        elif message.text:
+            attempt_text = message.text.strip()
+            if not attempt_text or attempt_text.startswith("/") or attempt_text in BUTTON_TEXTS:
+                return
+        else:
+            return
+
+        data = await state.get_data()
+        word = data.get("synonym_word", "")
+        synonyms = data.get("synonym_options", [])
+
+        await message.bot.send_chat_action(user_id, "typing")
+        level = user.get("level", settings.DEFAULT_USER_LEVEL)
+        result = await groq_client.evaluate_synonym_attempt(word, synonyms, attempt_text, level)
+
+        feedback = html.escape((result.get("feedback") or "").strip()) or "Nice try — want to give it another go?"
+        await message.answer(
+            f"📚 {feedback}",
+            parse_mode="HTML",
+            reply_markup=get_synonym_streak_keyboard()
+        )
+
+        # Готовы к следующему слову без повторного нажатия кнопки
+        await state.set_state(SynonymStreakState.awaiting_word)
+
+    except Exception as e:
+        logger.error(f"Error in synonym_streak_attempt: {e}")
+        await message.answer("Something went wrong. Try again?")
 
 @router.message(F.text == "↩ Switch")
 async def flow_switch_reply(message: Message, state: FSMContext):
@@ -902,13 +1012,6 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
         )
 
         await message.bot.send_chat_action(user_id, "typing")
-
-        # ─── Synonym Streak (только в Tutor с Mrs. Smith) ─────────────────────
-        streak_note = ""
-        if user.get("synonym_streak_enabled") and user.get("persona", "") == "mrs_smith":
-            asyncio.create_task(
-                _check_synonym_streak(user_id, user_text, message)
-            )
 
         # Два LLM параллельно: ответ + коррекция
         tutor_practice_error = None
