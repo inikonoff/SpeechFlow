@@ -91,19 +91,16 @@ def get_settings_keyboard(
     notifications_enabled: bool,
     recasting_enabled: bool,
     mistakes_practice_enabled: bool = False,
-    synonym_streak_enabled: bool = False,
     user_id: int = 0
 ) -> InlineKeyboardMarkup:
     notif_text    = "🔔 Notifications: ON"      if notifications_enabled      else "🔕 Notifications: OFF"
     recast_text   = "📝 Recasting: ON"          if recasting_enabled          else "📝 Recasting: OFF"
     practice_text = "🎯 Mistakes Practice: ON"  if mistakes_practice_enabled  else "🎯 Mistakes Practice: OFF"
-    streak_text   = "🔄 Synonym Streak: ON"     if synonym_streak_enabled     else "🔄 Synonym Streak: OFF"
 
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text=notif_text,    callback_data="toggle_notifications"))
     builder.row(InlineKeyboardButton(text=recast_text,   callback_data="toggle_recasting"))
     builder.row(InlineKeyboardButton(text=practice_text, callback_data="toggle_mistakes_practice"))
-    builder.row(InlineKeyboardButton(text=streak_text,   callback_data="toggle_synonym_streak"))
     if user_id in ADMIN_IDS:
         builder.row(InlineKeyboardButton(text="🔧 Админ-панель", callback_data="admin_panel"))
     builder.row(InlineKeyboardButton(text="← Back", callback_data="back_to_menu"))
@@ -235,6 +232,7 @@ def get_mode_keyboard() -> ReplyKeyboardMarkup:
         KeyboardButton(text="✉️ PenFriend"),
         KeyboardButton(text="🎙 Flow"),
     )
+    builder.row(KeyboardButton(text="🔄 Synonym Streak"))
     return builder.as_markup(resize_keyboard=True, persistent=True)
 
 
@@ -246,6 +244,15 @@ def get_flow_start_keyboard() -> ReplyKeyboardMarkup:
 def get_tutor_keyboard() -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
     builder.row(KeyboardButton(text="⏹ Stop Tutor"))
+    return builder.as_markup(resize_keyboard=True, persistent=True)
+
+
+def get_synonym_streak_keyboard() -> ReplyKeyboardMarkup:
+    builder = ReplyKeyboardBuilder()
+    builder.row(
+        KeyboardButton(text="🔄 New word"),
+        KeyboardButton(text="⏹ Stop Synonym Streak"),
+    )
     return builder.as_markup(resize_keyboard=True, persistent=True)
 
 
