@@ -724,19 +724,6 @@ class SupabaseDB:
             logger.error(f"Error checking subscription: {e}")
             return False
 
-    # ─── Synonym Streak ─────────────────────────────────────────────────────────
-
-    async def toggle_synonym_streak(self, telegram_id: int) -> bool:
-        """Переключает Synonym Streak, возвращает новое значение."""
-        try:
-            user = await self.get_or_create_user(telegram_id)
-            new_val = not user.get("synonym_streak_enabled", False)
-            await self.update_user(telegram_id, {"synonym_streak_enabled": new_val})
-            return new_val
-        except Exception as e:
-            logger.error(f"Error toggling synonym streak: {e}")
-            return False
-
     # ─── Счётчик сообщений для автооценки уровня ───────────────────────────────
 
     async def get_user_message_count(self, user_id: int) -> int:
