@@ -74,6 +74,20 @@ class GroqClient:
                 )
         logger.info(f"✅ Инициализировано {len(self.clients)} Groq клиентов")
 
+    @staticmethod
+    def _strip_think(text: Optional[str]) -> Optional[str]:
+        """
+        Защита от известного бага Groq: gpt-oss-120b иногда протекает
+        reasoning прямо в message.content (в т.ч. в <think>...</think>),
+        несмотря на include_reasoning=False. Подчищаем на всякий случай.
+        """
+        if not text:
+            return text
+        # Полные и незакрытые блоки <think>...</think>
+        cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+        cleaned = re.sub(r'^.*?</think>', '', cleaned, flags=re.DOTALL)
+        return cleaned.strip()
+
     async def _get_next_client(self) -> Optional[AsyncOpenAI]:
         if not self.clients:
             return None
@@ -176,6 +190,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         async def _correct(client):
             response = await client.chat.completions.create(
                 model="openai/gpt-oss-120b",
+                extra_body={"include_reasoning": False},
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"USER TEXT: {text}\n\nAnalyze and correct."}
@@ -186,7 +201,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
             return response.choices[0].message.content
 
         try:
-            result = await self._make_request(_correct)
+            result = self._strip_think(await self._make_request(_correct))
             match = re.search(r'{.*}', result, re.DOTALL)
             clean_json = match.group(0) if match else result
             return json.loads(clean_json)
@@ -261,11 +276,12 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         async def _flow(client):
             response = await client.chat.completions.create(
                 model="openai/gpt-oss-120b",
+                extra_body={"include_reasoning": False},
                 messages=messages,
                 temperature=0.9,
                 max_tokens=300
             )
-            return response.choices[0].message.content
+            return self._strip_think(response.choices[0].message.content)
 
         try:
             return await self._make_request(_flow)
@@ -321,11 +337,12 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         async def _penfriend(client):
             response = await client.chat.completions.create(
                 model="openai/gpt-oss-120b",
+                extra_body={"include_reasoning": False},
                 messages=messages,
                 temperature=0.85,
                 max_tokens=200
             )
-            return response.choices[0].message.content
+            return self._strip_think(response.choices[0].message.content)
 
         try:
             return await self._make_request(_penfriend)
@@ -356,6 +373,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         async def _opener(client):
             response = await client.chat.completions.create(
                 model="openai/gpt-oss-120b",
+                extra_body={"include_reasoning": False},
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": "[start the conversation]"}
@@ -363,7 +381,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 temperature=0.9,
                 max_tokens=100
             )
-            return response.choices[0].message.content
+            return self._strip_think(response.choices[0].message.content)
 
         try:
             return await self._make_request(_opener)
@@ -412,6 +430,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         async def _greeting(client):
             response = await client.chat.completions.create(
                 model="openai/gpt-oss-120b",
+                extra_body={"include_reasoning": False},
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": context_instruction}
@@ -419,7 +438,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 temperature=0.9,
                 max_tokens=100
             )
-            return response.choices[0].message.content
+            return self._strip_think(response.choices[0].message.content)
 
         try:
             return await self._make_request(_greeting)
@@ -433,6 +452,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         async def _detect(client):
             response = await client.chat.completions.create(
                 model="openai/gpt-oss-120b",
+                extra_body={"include_reasoning": False},
                 messages=[
                     {
                         "role": "system",
@@ -447,7 +467,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 temperature=0.0,
                 max_tokens=5
             )
-            return response.choices[0].message.content.strip().lower().startswith("yes")
+            return self._strip_think(response.choices[0].message.content).strip().lower().startswith("yes")
 
         try:
             return await self._make_request(_detect)
@@ -478,6 +498,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         async def _summarize(client):
             response = await client.chat.completions.create(
                 model="openai/gpt-oss-120b",
+                extra_body={"include_reasoning": False},
                 messages=[
                     {
                         "role": "system",
@@ -513,6 +534,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         async def _merge(client):
             response = await client.chat.completions.create(
                 model="openai/gpt-oss-120b",
+                extra_body={"include_reasoning": False},
                 messages=[
                     {
                         "role": "system",
@@ -527,7 +549,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 temperature=0.0,
                 max_tokens=400
             )
-            return response.choices[0].message.content.strip()
+            return self._strip_think(response.choices[0].message.content.strip())
 
         try:
             return await self._make_request(_merge)
@@ -585,6 +607,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         async def _deep_dive(client):
             response = await client.chat.completions.create(
                 model="openai/gpt-oss-120b",
+                extra_body={"include_reasoning": False},
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": data_summary}
@@ -592,7 +615,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 temperature=0.7,
                 max_tokens=250
             )
-            return response.choices[0].message.content.strip()
+            return self._strip_think(response.choices[0].message.content.strip())
 
         try:
             return await self._make_request(_deep_dive)
@@ -667,6 +690,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         async def _sunday(client):
             response = await client.chat.completions.create(
                 model="openai/gpt-oss-120b",
+                extra_body={"include_reasoning": False},
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": "[write the deep dive]"}
@@ -799,6 +823,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         async def _notify(client):
             response = await client.chat.completions.create(
                 model="openai/gpt-oss-120b",
+                extra_body={"include_reasoning": False},
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": "[write the message]"}
@@ -806,7 +831,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 temperature=0.9,
                 max_tokens=120
             )
-            return response.choices[0].message.content.strip()
+            return self._strip_think(response.choices[0].message.content.strip())
 
         try:
             return await self._make_request(_notify)
@@ -831,6 +856,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         async def _translate(client):
             response = await client.chat.completions.create(
                 model="openai/gpt-oss-120b",
+                extra_body={"include_reasoning": False},
                 messages=[
                     {
                         "role": "system",
@@ -850,7 +876,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 temperature=0.1,
                 max_tokens=400
             )
-            return response.choices[0].message.content
+            return self._strip_think(response.choices[0].message.content)
 
         try:
             return await self._make_request(_translate)
@@ -940,11 +966,12 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         async def _chat(client):
             response = await client.chat.completions.create(
                 model="openai/gpt-oss-120b",
+                extra_body={"include_reasoning": False},
                 messages=messages,
                 temperature=0.75,
                 max_tokens=300
             )
-            return response.choices[0].message.content
+            return self._strip_think(response.choices[0].message.content)
 
         try:
             return await self._make_request(_chat)
@@ -1027,6 +1054,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         async def _react(client):
             response = await client.chat.completions.create(
                 model="openai/gpt-oss-120b",
+                extra_body={"include_reasoning": False},
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user",   "content": user_msg},
@@ -1034,7 +1062,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 temperature=0.8,
                 max_tokens=80,
             )
-            return response.choices[0].message.content.strip()
+            return self._strip_think(response.choices[0].message.content.strip())
 
         try:
             return await self._make_request(_react)
@@ -1133,6 +1161,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         async def _multibubble(client):
             response = await client.chat.completions.create(
                 model="openai/gpt-oss-120b",
+                extra_body={"include_reasoning": False},
                 messages=messages,
                 temperature=0.85,
                 max_tokens=300,
@@ -1211,6 +1240,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         async def _assess(client):
             response = await client.chat.completions.create(
                 model="openai/gpt-oss-120b",
+                extra_body={"include_reasoning": False},
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user",   "content": f"Current declared level: {current_level}\n\nMessages:\n{sample}"},
@@ -1260,6 +1290,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         async def _analyze(client):
             response = await client.chat.completions.create(
                 model="openai/gpt-oss-120b",
+                extra_body={"include_reasoning": False},
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user",   "content": f"Student messages from this session:\n{sample}"},
@@ -1267,7 +1298,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 temperature=0.3,
                 max_tokens=400,
             )
-            return response.choices[0].message.content.strip()
+            return self._strip_think(response.choices[0].message.content.strip())
 
         try:
             return await self._make_request(_analyze)
@@ -1275,35 +1306,128 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
             logger.error(f"Error in generate_session_analysis: {e}")
             return "Analysis unavailable."
 
-    async def suggest_synonym(self, word: str) -> str:
-        """Предлагает один синоним для слова. Используется в Synonym Streak."""
-        async def _syn(client):
+    async def generate_synonym_lesson(self, user_message: str, level: str) -> Dict[str, Any]:
+        """
+        Synonym Streak, шаг 1: юзер просит помощь со словом
+        (например "help me with the word 'interesting'" или просто "interesting").
+        Mrs. Smith определяет слово и даёт 2-3 синонима с примерами.
+        """
+        system_prompt = f"""# ROLE
+You are Mrs. Smith, a warm and experienced English teacher, helping a student
+who asked you for synonyms of a specific English word.
+
+# TASK
+1. Figure out which word or short phrase the student wants synonyms for
+   from their message (they may phrase it as a request, or just send the bare word).
+2. Give 2-3 natural, commonly-used synonyms appropriate for a {level} learner.
+3. For each synonym, write ONE short example sentence showing natural usage.
+4. Write a brief, warm intro line in Mrs. Smith's voice (1 sentence, max 20 words)
+   introducing the synonyms — do not just list them coldly.
+
+# RULES
+- If the message contains no clear target word, set "word" to an empty string.
+- Synonyms must be genuinely useful alternatives, not obscure/academic words for beginners.
+- Example sentences: short, natural, spoken English. Max 12 words each.
+- Intro line: warm, teacherly, in Mrs. Smith's voice. No "Great question!" openers.
+
+# OUTPUT FORMAT (JSON ONLY, no markdown)
+{{
+  "word": "[the target word/phrase, or empty string if unclear]",
+  "intro": "[Mrs. Smith's one-sentence intro]",
+  "synonyms": [
+    {{"synonym": "...", "example": "..."}},
+    {{"synonym": "...", "example": "..."}}
+  ]
+}}"""
+
+        async def _lesson(client):
             response = await client.chat.completions.create(
                 model="openai/gpt-oss-120b",
+                extra_body={"include_reasoning": False},
                 messages=[
-                    {"role": "system", "content": (
-                        "You suggest a single English synonym for the given word.\n"
-                        "Rules:\n"
-                        "- Return ONLY the synonym word or short phrase (1-2 words max)\n"
-                        "- Choose a natural, common alternative suitable for spoken English\n"
-                        "- If no good synonym exists, return: NONE\n"
-                        "- No explanations, no punctuation"
-                    )},
-                    {"role": "user", "content": word},
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
                 ],
-                temperature=0.3,
-                max_tokens=10,
+                temperature=0.4,
+                max_tokens=350,
+                response_format={"type": "json_object"},
             )
-            return response.choices[0].message.content.strip()
+            return response.choices[0].message.content
 
         try:
-            result = await self._make_request(_syn)
-            if result and result != "NONE" and len(result) < 30:
-                return result
-            return ""
+            result = self._strip_think(await self._make_request(_lesson))
+            match = re.search(r'{.*}', result, re.DOTALL)
+            clean_json = match.group(0) if match else result
+            data = json.loads(clean_json)
+            data.setdefault("word", "")
+            data.setdefault("intro", "")
+            data.setdefault("synonyms", [])
+            return data
         except Exception as e:
-            logger.error(f"Error in suggest_synonym: {e}")
-            return ""
+            logger.error(f"Error in generate_synonym_lesson: {e}")
+            return {"word": "", "intro": "", "synonyms": []}
+
+    async def evaluate_synonym_attempt(
+        self,
+        word: str,
+        synonyms: List[str],
+        attempt_text: str,
+        level: str,
+    ) -> Dict[str, Any]:
+        """
+        Synonym Streak, шаг 2: студент пытается использовать один из синонимов
+        в своём примере. Mrs. Smith мягко проверяет и даёт фидбек.
+        """
+        synonyms_str = ", ".join(synonyms) if synonyms else "(none)"
+        system_prompt = f"""# ROLE
+You are Mrs. Smith, a warm English teacher. Your student was given these synonyms
+for the word "{word}": {synonyms_str}.
+They just tried to use one of the synonyms in their own sentence.
+
+# TASK
+Check gently whether they used one of the synonyms, and whether it's used correctly
+(grammar and meaning). Student level: {level}.
+
+# OUTPUT FORMAT (JSON ONLY, no markdown)
+{{
+  "used_synonym": true/false,
+  "which_synonym": "[the synonym they used, or empty string]",
+  "used_correctly": true/false,
+  "feedback": "[Mrs. Smith's warm, brief, in-character reply. Max 45 words. If correct, a genuine small acknowledgement, not 'Great job!'. If not quite right or they didn't use one, gently guide them without being harsh, and invite another try or a new word.]"
+}}"""
+
+        async def _eval(client):
+            response = await client.chat.completions.create(
+                model="openai/gpt-oss-120b",
+                extra_body={"include_reasoning": False},
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": attempt_text},
+                ],
+                temperature=0.5,
+                max_tokens=200,
+                response_format={"type": "json_object"},
+            )
+            return response.choices[0].message.content
+
+        try:
+            result = self._strip_think(await self._make_request(_eval))
+            match = re.search(r'{.*}', result, re.DOTALL)
+            clean_json = match.group(0) if match else result
+            data = json.loads(clean_json)
+            data.setdefault("used_synonym", False)
+            data.setdefault("which_synonym", "")
+            data.setdefault("used_correctly", False)
+            data.setdefault("feedback", "Nice try — want to give it another go?")
+            return data
+        except Exception as e:
+            logger.error(f"Error in evaluate_synonym_attempt: {e}")
+            return {
+                "used_synonym": False,
+                "which_synonym": "",
+                "used_correctly": False,
+                "feedback": "Nice try — want to give it another go?",
+            }
 
     async def suggest_english_name(self, name: str) -> str:
         """
@@ -1326,6 +1450,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         async def _suggest(client):
             response = await client.chat.completions.create(
                 model="openai/gpt-oss-120b",
+                extra_body={"include_reasoning": False},
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user",   "content": name},
@@ -1333,7 +1458,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 temperature=0.0,
                 max_tokens=20,
             )
-            return response.choices[0].message.content.strip()
+            return self._strip_think(response.choices[0].message.content.strip())
 
         try:
             result = await self._make_request(_suggest)
