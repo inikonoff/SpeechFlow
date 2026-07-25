@@ -85,11 +85,10 @@ async def cmd_settings(message: Message):
     notif     = user.get("notifications_enabled", True)
     recasting = user.get("recasting_enabled", False)
     practice  = user.get("mistakes_practice_enabled", False)
-    streak    = user.get("synonym_streak_enabled", False)
     await message.answer(
         "⚙️ <b>Settings</b>",
         parse_mode="HTML",
-        reply_markup=get_settings_keyboard(notif, recasting, practice, streak, message.from_user.id)
+        reply_markup=get_settings_keyboard(notif, recasting, practice, message.from_user.id)
     )
 
 @router.message(Command("support"))
@@ -227,12 +226,11 @@ async def show_settings(callback: CallbackQuery):
         notif     = user.get("notifications_enabled", True)
         recasting = user.get("recasting_enabled", False)
         practice  = user.get("mistakes_practice_enabled", False)
-        streak    = user.get("synonym_streak_enabled", False)
         await safe_edit_text(
             callback.message,
             "⚙️ <b>Settings</b>",
             parse_mode="HTML",
-            reply_markup=get_settings_keyboard(notif, recasting, practice, streak, callback.from_user.id)
+            reply_markup=get_settings_keyboard(notif, recasting, practice, callback.from_user.id)
         )
         await callback.answer()
     except Exception as e:
@@ -251,10 +249,9 @@ async def toggle_notifications(callback: CallbackQuery):
 
         recasting = user.get("recasting_enabled", False)
         practice  = user.get("mistakes_practice_enabled", False)
-        streak    = user.get("synonym_streak_enabled", False)
         await safe_edit_reply_markup(
             callback.message,
-            reply_markup=get_settings_keyboard(new_value, recasting, practice, streak, callback.from_user.id)
+            reply_markup=get_settings_keyboard(new_value, recasting, practice, callback.from_user.id)
         )
     except Exception as e:
         logger.error(f"Error toggling notifications: {e}")
@@ -270,10 +267,9 @@ async def cq_toggle_recasting(callback: CallbackQuery):
         user = await db.get_or_create_user(callback.from_user.id)
         notif = user.get("notifications_enabled", True)
         practice  = user.get("mistakes_practice_enabled", False)
-        streak    = user.get("synonym_streak_enabled", False)
         await safe_edit_reply_markup(
             callback.message,
-            reply_markup=get_settings_keyboard(notif, new_val, practice, streak, callback.from_user.id)
+            reply_markup=get_settings_keyboard(notif, new_val, practice, callback.from_user.id)
         )
     except Exception as e:
         logger.error(f"Error toggling recasting: {e}")
@@ -288,31 +284,12 @@ async def cq_toggle_mistakes_practice(callback: CallbackQuery):
         user = await db.get_or_create_user(callback.from_user.id)
         notif     = user.get("notifications_enabled", True)
         recasting = user.get("recasting_enabled", False)
-        streak    = user.get("synonym_streak_enabled", False)
         await safe_edit_reply_markup(
             callback.message,
-            reply_markup=get_settings_keyboard(notif, recasting, new_val, streak, callback.from_user.id)
+            reply_markup=get_settings_keyboard(notif, recasting, new_val, callback.from_user.id)
         )
     except Exception as e:
         logger.error(f"Error toggling mistakes practice: {e}")
-        await callback.answer("Error.", show_alert=True)
-
-@router.callback_query(F.data == "toggle_synonym_streak")
-async def cq_toggle_synonym_streak(callback: CallbackQuery):
-    try:
-        new_val = await db.toggle_synonym_streak(callback.from_user.id)
-        status = "ON 🔄" if new_val else "OFF 🔄"
-        await callback.answer(f"Synonym Streak {status}", show_alert=False)
-        user = await db.get_or_create_user(callback.from_user.id)
-        notif     = user.get("notifications_enabled", True)
-        recasting = user.get("recasting_enabled", False)
-        practice  = user.get("mistakes_practice_enabled", False)
-        await safe_edit_reply_markup(
-            callback.message,
-            reply_markup=get_settings_keyboard(notif, recasting, practice, new_val, callback.from_user.id)
-        )
-    except Exception as e:
-        logger.error(f"Error toggling synonym streak: {e}")
         await callback.answer("Error.", show_alert=True)
 
 # ─── Paywall ──────────────────────────────────────────────────────────────────
@@ -600,12 +577,11 @@ async def back_to_settings(callback: CallbackQuery):
         notif     = user.get("notifications_enabled", True)
         recasting = user.get("recasting_enabled", False)
         practice  = user.get("mistakes_practice_enabled", False)
-        streak    = user.get("synonym_streak_enabled", False)
         await safe_edit_text(
             callback.message,
             "⚙️ <b>Settings</b>",
             parse_mode="HTML",
-            reply_markup=get_settings_keyboard(notif, recasting, practice, streak, callback.from_user.id)
+            reply_markup=get_settings_keyboard(notif, recasting, practice, callback.from_user.id)
         )
         await callback.answer()
     except Exception as e:
