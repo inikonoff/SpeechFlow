@@ -652,7 +652,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         mrs_smith_prompt = _get_tutor_prompt("mrs_smith")
 
         msgs_this_week = stats.get("msgs_this_week", 0)
-        streak = stats.get("streak_days", 0)
+        streak = stats.get("user", {}).get("streak_days", 0)
 
         # Реальные фразы пользователя — не придуманные примеры.
         # Экранируем HTML здесь же: LLM ниже просят дословно процитировать эти
@@ -719,9 +719,9 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                     {"role": "user", "content": "[write the deep dive]"}
                 ],
                 temperature=0.8,
-                max_tokens=500
+                max_tokens=700
             )
-            raw = response.choices[0].message.content.strip()
+            raw = self._extract_text(response, "generate_sunday_deep_dive")
             # Страховка: убираем markdown если LLM всё равно добавил
             raw = re.sub(r'^#{1,3}\s*', '', raw, flags=re.MULTILINE)
             raw = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', raw)
