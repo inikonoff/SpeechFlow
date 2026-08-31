@@ -119,10 +119,17 @@ def get_system_stats() -> Dict[str, Any]:
         logger.error(f"Error getting system stats: {e}")
         return {}
 
-def check_services_health() -> Dict[str, bool]:
+_supabase_health_cache: Dict[str, Any] = {"ok": False, "checked_at": 0.0}
+SUPABASE_HEALTH_CACHE_SECONDS = 30  # не долбим Supabase на каждый /health-пинг
+
+async def check_services_health() -> Dict[str, bool]:
+    now = time.time()
+    if now - _supabase_health_cache["checked_at"] > SUPABASE_HEALTH_CACHE_SECONDS:
+        _supabase_health_cache["ok"] = await db.ping()
+        _supabase_health_cache["checked_at"] = now
     services = {
         "groq": len(groq_client.clients) > 0 if hasattr(groq_client, 'clients') else False,
-        "supabase": db is not None
+        "supabase": _supabase_health_cache["ok"],
     }
     return services
 
@@ -202,7 +209,7 @@ async def root():
 @app.head("/health")
 async def health_check():
     try:
-        services = check_services_health()
+        services = await check_services_health()
         polling_healthy = polling_task is not None and not polling_task.done()
         critical_services = ["groq", "supabase"]
         all_critical_ok = all(services.get(svc, False) for svc in critical_services)
