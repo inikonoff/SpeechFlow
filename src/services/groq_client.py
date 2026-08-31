@@ -13,6 +13,7 @@ import asyncio
 import logging
 import json
 import re
+import html
 from typing import List, Optional, Dict, Any, Tuple
 from openai import AsyncOpenAI
 
@@ -638,13 +639,20 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         msgs_this_week = stats.get("msgs_this_week", 0)
         streak = stats.get("streak_days", 0)
 
-        # Реальные фразы пользователя — не придуманные примеры
+        # Реальные фразы пользователя — не придуманные примеры.
+        # Экранируем HTML здесь же: LLM ниже просят дословно процитировать эти
+        # фразы в <blockquote>, а финальный текст рендерится в Telegram с
+        # parse_mode=HTML без повторного экранирования (см. cq_stats_deep/
+        # cq_stats_original в menu.py) — так что если в реплике пользователя
+        # случайно оказались "<"/">"/"&", это должно быть безопасно уже здесь.
         if errors:
             patterns_lines = []
             for e in errors[:4]:
                 cat = e.get("category", "").strip()
-                mistake = e.get("examples", [None])[0] if e.get("examples") else None
-                corrected = e.get("corrected_text", "") or ""
+                examples = e.get("examples") or []
+                corrected_examples = e.get("corrected_examples") or []
+                mistake = html.escape(examples[0]) if examples and examples[0] else None
+                corrected = html.escape(corrected_examples[0]) if corrected_examples and corrected_examples[0] else ""
                 if not cat:
                     continue
                 if mistake and corrected:
@@ -829,9 +837,15 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                     {"role": "user", "content": "[write the message]"}
                 ],
                 temperature=0.9,
-                max_tokens=120
+                max_tokens=200
             )
-            return self._strip_think(response.choices[0].message.content.strip())
+            text = self._strip_think(response.choices[0].message.content.strip())
+            if not text:
+                # Groq gpt-oss-120b иногда тратит весь max_tokens на reasoning
+                # и не оставляет текста после стрипа <think> — считаем это сбоем,
+                # чтобы сработал fallback ниже, а не ушло пустое сообщение юзеру.
+                raise ValueError("Empty response after stripping reasoning")
+            return text
 
         try:
             return await self._make_request(_notify)
@@ -1207,7 +1221,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         Возвращает:
         {
-            "assessed_level": "intermediate",  # beginner/elementary/intermediate/advanced
+            "assessed_level": "intermediate",  # beginner/intermediate/advanced
             "confidence": "high"               # high/low
         }
         Если confidence != "high" или assessed_level == current_level → ничего не делать.
@@ -1225,10 +1239,9 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         system = (
             "You assess English proficiency from a sample of spoken/written messages.\n\n"
-            "Levels: beginner, elementary, intermediate, advanced\n\n"
+            "Levels: beginner, intermediate, advanced\n\n"
             "Criteria:\n"
             "- beginner: very simple sentences, many basic errors, limited vocabulary\n"
-            "- elementary: simple sentences with common errors, basic vocabulary\n"
             "- intermediate: mostly correct sentences, some grammar issues, decent vocabulary\n"
             "- advanced: complex sentences, rare errors, wide vocabulary, natural flow\n\n"
             "confidence = 'high' only if the sample clearly and consistently matches a level.\n"

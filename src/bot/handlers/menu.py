@@ -668,14 +668,18 @@ async def cq_stats_deep(callback: CallbackQuery):
         # Добавляем ошибки за неделю для более глубокого анализа
         errors = await db.get_weekly_errors_for_report(user_id)
 
-        # Если есть ошибки — используем sunday deep dive формат (с примерами)
-        # Если нет — используем stats deep dive (нарративный)
+        # Если есть ошибки — используем sunday deep dive формат (с примерами).
+        # Он уже возвращает готовый HTML (<blockquote>/<b>), пользовательский
+        # текст экранирован внутри generate_sunday_deep_dive — повторный
+        # html.escape() здесь сломал бы разметку.
+        # Если ошибок нет — используем stats deep dive (чистая проза без
+        # HTML-тегов), её как раз нужно экранировать перед рендером.
         if errors:
             deep_text = await groq_client.generate_sunday_deep_dive(stats, errors)
+            safe = deep_text
         else:
             deep_text = await groq_client.generate_stats_deep_dive(stats)
-
-        safe = html.escape(deep_text)
+            safe = html.escape(deep_text)
         msg_id = callback.message.message_id
 
         await safe_edit_text(
@@ -742,9 +746,10 @@ async def cq_stats_original(callback: CallbackQuery):
             errors = await db.get_weekly_errors_for_report(user_id)
             if errors:
                 deep_text = await groq_client.generate_sunday_deep_dive(stats, errors)
+                safe = deep_text  # уже готовый HTML, экранировано внутри groq_client
             else:
                 deep_text = await groq_client.generate_stats_deep_dive(stats)
-            safe = html.escape(deep_text)
+                safe = html.escape(deep_text)  # чистая проза без HTML-тегов
             text = f"📚 <b>Mrs. Smith's Note</b>\n\n{safe}"
         else:
             text = _build_quick_stats(stats)

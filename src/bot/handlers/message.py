@@ -12,7 +12,7 @@ from aiogram.fsm.context import FSMContext
 from src.bot.handlers.states import FlowState, SynonymStreakState
 from typing import Dict, Any
 
-from src.config import settings, ADMIN_IDS, has_feature
+from src.config import settings, ADMIN_IDS, has_feature, get_available_personas
 from src.services.supabase_db import db
 from src.services.groq_client import groq_client
 from src.utils.audio import save_voice_file, cleanup_file, read_file_bytes
@@ -207,7 +207,7 @@ async def _background_flow_error_check(user_id: int, user_text: str, user_level:
 
 # ─── Автооценка уровня (fire-and-forget) ─────────────────────────────────────
 
-LEVEL_ORDER = ["beginner", "elementary", "intermediate", "advanced"]
+LEVEL_ORDER = ["beginner", "intermediate", "advanced"]
 
 async def _run_level_assessment(user_id: int, current_level: str, message: Message) -> None:
     """
@@ -388,9 +388,11 @@ async def cq_session_summary(callback: CallbackQuery, state: FSMContext):
 
 @router.message(F.text == "🎙 Flow")
 async def activate_flow(message: Message, state: FSMContext):
+    user = await db.get_or_create_user(message.from_user.id)
+    plan = user.get("subscription_plan", "free")
     await state.update_data(active_mode=MODE_FLOW)
     await state.set_state(FlowState.choosing_persona)
-    await message.answer("Who would you like to talk to?", reply_markup=get_persona_keyboard())
+    await message.answer("Who would you like to talk to?", reply_markup=get_persona_keyboard(plan))
 
 @router.message(F.text == "⏹ Stop Flow")
 async def deactivate_flow(message: Message, state: FSMContext):
@@ -417,14 +419,36 @@ async def deactivate_tutor(message: Message, state: FSMContext):
 
 @router.message(F.text == "✉️ PenFriend")
 async def activate_penfriend(message: Message, state: FSMContext):
+    user = await db.get_or_create_user(message.from_user.id)
+    plan = user.get("subscription_plan", "free")
     await db.update_mode(message.from_user.id, MODE_PENFRIEND)
     await state.update_data(active_mode=MODE_PENFRIEND)
     await state.set_state(FlowState.choosing_persona)
     await message.answer(
         "✉️ <b>PenFriend Mode</b>\n\nWho would you like to write to?",
         parse_mode="HTML",
-        reply_markup=get_persona_keyboard()
+        reply_markup=get_persona_keyboard(plan)
     )
+
+@router.callback_query(F.data == "switch_to_penfriend")
+async def cq_switch_to_penfriend(callback: CallbackQuery, state: FSMContext):
+    """Кнопка PenFriend на экране лимита сообщений — переключает в PenFriend Mode."""
+    try:
+        user_id = callback.from_user.id
+        user = await db.get_or_create_user(user_id)
+        plan = user.get("subscription_plan", "free")
+        await db.update_mode(user_id, MODE_PENFRIEND)
+        await state.update_data(active_mode=MODE_PENFRIEND)
+        await state.set_state(FlowState.choosing_persona)
+        await callback.answer()
+        await callback.message.answer(
+            "✉️ <b>PenFriend Mode</b>\n\nWho would you like to write to?",
+            parse_mode="HTML",
+            reply_markup=get_persona_keyboard(plan)
+        )
+    except Exception as e:
+        logger.error(f"Error in switch_to_penfriend: {e}")
+        await callback.answer("Something went wrong.", show_alert=True)
 
 @router.message(F.text == "⏹ Stop PenFriend")
 async def deactivate_penfriend(message: Message, state: FSMContext):
@@ -592,6 +616,9 @@ async def flow_switch_reply(message: Message, state: FSMContext):
         fsm_data = await state.get_data()
         current_mode = fsm_data.get("active_mode", MODE_FLOW)
 
+        user = await db.get_or_create_user(user_id)
+        plan = user.get("subscription_plan", "free")
+
         history = await db.get_history(user_id, limit=settings.CONTEXT_WINDOW)
         context_text = " | ".join([
             f"{m['role']}: {m['content']}" for m in history
@@ -599,7 +626,7 @@ async def flow_switch_reply(message: Message, state: FSMContext):
 
         await state.update_data(switch_context=context_text, active_mode=current_mode)
         await state.set_state(FlowState.choosing_persona)
-        await message.answer("Who would you like to talk to next?", reply_markup=get_persona_keyboard())
+        await message.answer("Who would you like to talk to next?", reply_markup=get_persona_keyboard(plan))
     except Exception as e:
         logger.error(f"Error in flow switch reply: {e}")
         await message.answer("Something went wrong. Try again.")
@@ -612,6 +639,19 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
         persona_key = callback.data.split("_", 1)[1]
         user_id = callback.from_user.id
         voice = get_persona_voice(persona_key)
+
+        user_for_plan = await db.get_or_create_user(user_id)
+        plan = user_for_plan.get("subscription_plan", "free")
+        if persona_key not in get_available_personas(plan):
+            from src.bot.keyboards import get_paywall_keyboard
+            await callback.answer()
+            await callback.message.answer(
+                f"🔒 {get_persona_display(persona_key)} is part of Standard/Pro.\n\n"
+                f"Upgrade to unlock all 6 characters.",
+                parse_mode="HTML",
+                reply_markup=get_paywall_keyboard(plan)
+            )
+            return
 
         fsm_data = await state.get_data()
         switch_context = fsm_data.get("switch_context", "")
@@ -688,6 +728,13 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
                 _cache_original(sent.message_id, greeting)
                 _cache_persona_display(sent.message_id, persona_display)
                 await safe_edit_reply_markup(sent, reply_markup=get_flow_voice_keyboard(sent.message_id))
+            else:
+                # Fallback — текст, если TTS не сработал
+                safe_greeting = html.escape(greeting)
+                sent = await callback.message.answer(f"💬 {safe_greeting}\n\n<i>{persona_display}</i>", parse_mode="HTML")
+                _cache_original(sent.message_id, greeting)
+                _cache_persona_display(sent.message_id, persona_display)
+                await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
         else:
             safe_greeting = html.escape(greeting)
             sent = await callback.message.answer(f"💬 {safe_greeting}\n\n<i>{persona_display}</i>", parse_mode="HTML")
@@ -917,6 +964,18 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
                 _cache_original(sent.message_id, chat_response)
                 _cache_persona_display(sent.message_id, persona_display)
                 await safe_edit_reply_markup(sent, reply_markup=get_flow_voice_keyboard(sent.message_id))
+            else:
+                # Fallback — текст, если TTS не сработал (Flow голосовой, но не оставлять юзера без ответа)
+                safe_response = html.escape(chat_response)
+                display_response = _md_bold_to_html(safe_response)
+                sent = await message.answer(
+                    f"💬 {display_response}\n\n<i>{html.escape(persona_display)}</i>",
+                    parse_mode="HTML"
+                )
+                _cache_original(sent.message_id, chat_response)
+                _cache_display(sent.message_id, display_response)
+                _cache_persona_display(sent.message_id, persona_display)
+                await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
 
         if is_farewell:
             asyncio.create_task(run_summarization(user_id))
@@ -1081,11 +1140,12 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
             (settings.VOICE_RESPONSE_MODE == "mirror" and is_voice_input)
         )
 
+        persona_display = get_persona_display(user.get("persona", "mrs_smith"))
+        voice_sent = False
         if should_reply_voice:
             await message.bot.send_chat_action(user_id, "record_voice")
             voice_bytes_out = await groq_client.text_to_speech(chat_response, voice=voice)
             if voice_bytes_out:
-                persona_display = get_persona_display(user.get("persona", "mrs_smith"))
                 voice_file_out = BufferedInputFile(voice_bytes_out, filename="response.wav")
                 sent_voice = await message.answer_voice(
                     voice_file_out,
@@ -1097,10 +1157,13 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
                     sent_voice,
                     reply_markup=get_flow_voice_keyboard(sent_voice.message_id)
                 )
-        else:
+                voice_sent = True
+
+        if not voice_sent:
+            # Либо голос выключен настройкой, либо TTS не сработал — в обоих
+            # случаях юзер должен получить хоть какой-то ответ текстом.
             safe_response = html.escape(chat_response)
             display_response = _md_bold_to_html(safe_response)
-            persona_display = get_persona_display(user.get("persona", "mrs_smith"))
             sent = await message.answer(f"💬 {display_response}\n\n<i>{html.escape(persona_display)}</i>", parse_mode="HTML")
             _cache_original(sent.message_id, chat_response)
             _cache_display(sent.message_id, display_response)

@@ -21,11 +21,14 @@ def get_level_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def get_persona_keyboard() -> InlineKeyboardMarkup:
+def get_persona_keyboard(plan: str = "free") -> InlineKeyboardMarkup:
+    from src.config import get_available_personas
     builder = InlineKeyboardBuilder()
     personas = get_all_personas()
+    available = get_available_personas(plan)
     for key, name in personas.items():
-        builder.row(InlineKeyboardButton(text=name, callback_data=f"persona_{key}"))
+        label = name if key in available else f"🔒 {name}"
+        builder.row(InlineKeyboardButton(text=label, callback_data=f"persona_{key}"))
     builder.row(InlineKeyboardButton(text="← Back", callback_data="settings"))
     return builder.as_markup()
 
