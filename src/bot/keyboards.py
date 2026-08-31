@@ -94,7 +94,8 @@ def get_settings_keyboard(
     notifications_enabled: bool,
     recasting_enabled: bool,
     mistakes_practice_enabled: bool = False,
-    user_id: int = 0
+    user_id: int = 0,
+    plan: str = "free",
 ) -> InlineKeyboardMarkup:
     notif_text    = "🔔 Notifications: ON"      if notifications_enabled      else "🔕 Notifications: OFF"
     recast_text   = "📝 Recasting: ON"          if recasting_enabled          else "📝 Recasting: OFF"
@@ -105,6 +106,10 @@ def get_settings_keyboard(
     builder.row(InlineKeyboardButton(text=recast_text,   callback_data="toggle_recasting"))
     builder.row(InlineKeyboardButton(text=practice_text, callback_data="toggle_mistakes_practice"))
     if user_id in ADMIN_IDS:
+        builder.row(InlineKeyboardButton(
+            text=f"🧪 Test plan: {plan.capitalize()}",
+            callback_data="admin_cycle_plan"
+        ))
         builder.row(InlineKeyboardButton(text="🔧 Админ-панель", callback_data="admin_panel"))
     builder.row(InlineKeyboardButton(text="← Back", callback_data="back_to_menu"))
     return builder.as_markup()

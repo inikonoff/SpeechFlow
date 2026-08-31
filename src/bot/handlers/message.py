@@ -635,11 +635,12 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
             notif = user.get("notifications_enabled", True)
             recasting = user.get("recasting_enabled", False)
             practice = user.get("mistakes_practice_enabled", False)
+            settings_plan = user.get("subscription_plan") or "free"
             await safe_edit_text(
                 callback.message,
                 f"👤 Now talking to {display_name}.\n\n⚙️ <b>Settings</b>",
                 parse_mode="HTML",
-                reply_markup=get_settings_keyboard(notif, recasting, practice, user_id)
+                reply_markup=get_settings_keyboard(notif, recasting, practice, user_id, settings_plan)
             )
             await callback.answer()
             return

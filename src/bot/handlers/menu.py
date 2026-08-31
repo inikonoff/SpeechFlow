@@ -85,10 +85,11 @@ async def cmd_settings(message: Message):
     notif     = user.get("notifications_enabled", True)
     recasting = user.get("recasting_enabled", False)
     practice  = user.get("mistakes_practice_enabled", False)
+    plan      = user.get("subscription_plan") or "free"
     await message.answer(
         "⚙️ <b>Settings</b>",
         parse_mode="HTML",
-        reply_markup=get_settings_keyboard(notif, recasting, practice, message.from_user.id)
+        reply_markup=get_settings_keyboard(notif, recasting, practice, message.from_user.id, plan)
     )
 
 @router.message(Command("support"))
@@ -226,11 +227,12 @@ async def show_settings(callback: CallbackQuery):
         notif     = user.get("notifications_enabled", True)
         recasting = user.get("recasting_enabled", False)
         practice  = user.get("mistakes_practice_enabled", False)
+        plan      = user.get("subscription_plan") or "free"
         await safe_edit_text(
             callback.message,
             "⚙️ <b>Settings</b>",
             parse_mode="HTML",
-            reply_markup=get_settings_keyboard(notif, recasting, practice, callback.from_user.id)
+            reply_markup=get_settings_keyboard(notif, recasting, practice, callback.from_user.id, plan)
         )
         await callback.answer()
     except Exception as e:
@@ -249,9 +251,10 @@ async def toggle_notifications(callback: CallbackQuery):
 
         recasting = user.get("recasting_enabled", False)
         practice  = user.get("mistakes_practice_enabled", False)
+        plan      = user.get("subscription_plan") or "free"
         await safe_edit_reply_markup(
             callback.message,
-            reply_markup=get_settings_keyboard(new_value, recasting, practice, callback.from_user.id)
+            reply_markup=get_settings_keyboard(new_value, recasting, practice, callback.from_user.id, plan)
         )
     except Exception as e:
         logger.error(f"Error toggling notifications: {e}")
@@ -267,9 +270,10 @@ async def cq_toggle_recasting(callback: CallbackQuery):
         user = await db.get_or_create_user(callback.from_user.id)
         notif = user.get("notifications_enabled", True)
         practice  = user.get("mistakes_practice_enabled", False)
+        plan      = user.get("subscription_plan") or "free"
         await safe_edit_reply_markup(
             callback.message,
-            reply_markup=get_settings_keyboard(notif, new_val, practice, callback.from_user.id)
+            reply_markup=get_settings_keyboard(notif, new_val, practice, callback.from_user.id, plan)
         )
     except Exception as e:
         logger.error(f"Error toggling recasting: {e}")
@@ -284,12 +288,45 @@ async def cq_toggle_mistakes_practice(callback: CallbackQuery):
         user = await db.get_or_create_user(callback.from_user.id)
         notif     = user.get("notifications_enabled", True)
         recasting = user.get("recasting_enabled", False)
+        plan      = user.get("subscription_plan") or "free"
         await safe_edit_reply_markup(
             callback.message,
-            reply_markup=get_settings_keyboard(notif, recasting, new_val, callback.from_user.id)
+            reply_markup=get_settings_keyboard(notif, recasting, new_val, callback.from_user.id, plan)
         )
     except Exception as e:
         logger.error(f"Error toggling mistakes practice: {e}")
+        await callback.answer("Error.", show_alert=True)
+
+@router.callback_query(F.data == "admin_cycle_plan")
+async def cq_admin_cycle_plan(callback: CallbackQuery):
+    """Только для ADMIN_IDS: циклический переключатель тарифа для тестирования платных фич."""
+    try:
+        if callback.from_user.id not in ADMIN_IDS:
+            await callback.answer("⛔ Admin only.", show_alert=True)
+            return
+
+        user = await db.get_or_create_user(callback.from_user.id)
+        current_plan = user.get("subscription_plan") or "free"
+        cycle = {"free": "standard", "standard": "pro", "pro": "free"}
+        new_plan = cycle.get(current_plan, "free")
+
+        # expires_at сбрасываем в None — иначе check_subscription_expired
+        # откатит тестовый план обратно на free при следующей проверке лимита.
+        await db.update_user(callback.from_user.id, {
+            "subscription_plan": new_plan,
+            "subscription_expires_at": None,
+        })
+        await callback.answer(f"Test plan → {new_plan.capitalize()}", show_alert=False)
+
+        notif     = user.get("notifications_enabled", True)
+        recasting = user.get("recasting_enabled", False)
+        practice  = user.get("mistakes_practice_enabled", False)
+        await safe_edit_reply_markup(
+            callback.message,
+            reply_markup=get_settings_keyboard(notif, recasting, practice, callback.from_user.id, new_plan)
+        )
+    except Exception as e:
+        logger.error(f"Error cycling admin test plan: {e}")
         await callback.answer("Error.", show_alert=True)
 
 # ─── Paywall ──────────────────────────────────────────────────────────────────
@@ -577,11 +614,12 @@ async def back_to_settings(callback: CallbackQuery):
         notif     = user.get("notifications_enabled", True)
         recasting = user.get("recasting_enabled", False)
         practice  = user.get("mistakes_practice_enabled", False)
+        plan      = user.get("subscription_plan") or "free"
         await safe_edit_text(
             callback.message,
             "⚙️ <b>Settings</b>",
             parse_mode="HTML",
-            reply_markup=get_settings_keyboard(notif, recasting, practice, callback.from_user.id)
+            reply_markup=get_settings_keyboard(notif, recasting, practice, callback.from_user.id, plan)
         )
         await callback.answer()
     except Exception as e:
