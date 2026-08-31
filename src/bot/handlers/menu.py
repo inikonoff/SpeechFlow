@@ -707,6 +707,40 @@ async def cq_stats_quick(callback: CallbackQuery):
         logger.error(f"Error in stats_quick: {e}")
         await callback.answer("Error.", show_alert=True)
 
+@router.callback_query(F.data == "my_practice_log")
+async def cq_my_practice_log(callback: CallbackQuery):
+    """Список последних залогированных ошибок юзера (кнопка 'My Mistakes' в /stats)."""
+    try:
+        user_id = callback.from_user.id
+        errors = await db.get_recent_errors(user_id, limit=10)
+        msg_id = callback.message.message_id
+
+        if not errors:
+            text = "📋 <b>My Mistakes</b>\n\nNo mistakes logged yet — keep practicing!"
+        else:
+            lines = ["📋 <b>My Mistakes</b>\n"]
+            for e in errors:
+                cat = html.escape(str(e.get("category") or "grammar").strip())
+                mistake = html.escape(str(e.get("mistake_text") or "").strip())
+                corrected = html.escape(str(e.get("corrected_text") or "").strip())
+                if not mistake:
+                    continue
+                line = f"• <b>{cat}</b>: \"{mistake}\""
+                if corrected:
+                    line += f" → \"{corrected}\""
+                lines.append(line)
+            text = "\n".join(lines)
+
+        await safe_edit_text(
+            callback.message, text,
+            parse_mode="HTML",
+            reply_markup=get_stats_back_keyboard(msg_id, "quick")
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in my_practice_log: {e}")
+        await callback.answer("Error.", show_alert=True)
+
 @router.callback_query(F.data.startswith("stats_translate_"))
 async def cq_stats_translate(callback: CallbackQuery):
     try:

@@ -701,6 +701,21 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
         voice = fsm_data.get("voice") or get_persona_voice(persona_key)
         active_mode = fsm_data.get("active_mode", MODE_FLOW)
 
+        # Персонаж мог стать недоступен уже ПОСЛЕ выбора (например, закончился
+        # триал) — flow_persona_selected проверяет план только в момент
+        # переключения, здесь перепроверяем на каждое сообщение, иначе
+        # разговор с запертым персонажем продолжался бы бесконечно.
+        plan = user.get("subscription_plan") or "free"
+        if persona_key not in get_available_personas(plan):
+            await message.answer(
+                f"🔒 Your access to {get_persona_display(persona_key)} has ended — "
+                f"this character is part of Pro.\n\n"
+                f"Upgrade to keep talking to them, or press ↩ Switch to pick an available character.",
+                parse_mode="HTML",
+                reply_markup=get_paywall_period_keyboard()
+            )
+            return
+
         # PenFriend — только текст
         if active_mode == MODE_PENFRIEND and message.voice:
             await message.answer(
