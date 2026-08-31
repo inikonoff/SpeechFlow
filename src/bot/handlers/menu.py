@@ -529,6 +529,13 @@ async def show_admin_user_card(callback: CallbackQuery):
         created = (user.get("created_at") or "")[:10] or "—"
         last_active = (user.get("last_active") or "")[:10] or "—"
 
+        plan = user.get("subscription_plan") or "free"
+        plan_icon = "🌟" if plan == "pro" else "🆓"
+        plan_line = f"{plan_icon} Тариф: <b>{plan.capitalize()}</b>"
+        expires_at = user.get("subscription_expires_at")
+        if plan != "free" and expires_at:
+            plan_line += f" (до {expires_at[:10]})"
+
         mode_icons = {"tutor": "🎓", "penfriend": "✉️", "flow": "🎙"}
         persona_icons = {
             "greg": "🏥", "mark": "🍳", "junior": "💻",
@@ -538,6 +545,7 @@ async def show_admin_user_card(callback: CallbackQuery):
         text = (
             f"👤 <b>{html.escape(name)}</b> {html.escape(username)}\n"
             f"🆔 <code>{telegram_id}</code>\n\n"
+            f"{plan_line}\n"
             f"📚 Уровень: <b>{level}</b>\n"
             f"🗂 Режим: {mode_icons.get(mode, '')} <b>{mode.capitalize()}</b>\n"
             f"🎭 Персонаж: {persona_icons.get(persona.lower(), '👤')} <b>{persona}</b>\n\n"
