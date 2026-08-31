@@ -57,26 +57,23 @@ def get_admin_ids() -> List[int]:
 ADMIN_IDS = get_admin_ids()
 
 # ─── Тарифные планы ──────────────────────────────────────────────────────────
+# Обновление: тариф Standard убран, остались только free и pro.
 
-SUBSCRIPTION_PLANS = ("free", "standard", "pro")
+SUBSCRIPTION_PLANS = ("free", "pro")
 
-# Лимиты сообщений в день по тарифам
+# Лимиты сообщений в день по тарифам (считается по сообщениям юзера —
+# одно сообщение = одна пара юзер/бот, ответ бота отдельно не считается)
 DAILY_MESSAGE_LIMITS: dict = {
-    "free":     10,
-    "standard": 30,
-    "pro":      0,   # 0 = безлимит
+    "free": 10,
+    "pro":  0,   # 0 = безлимит
 }
 
 # Цены в Telegram Stars (1 Star ≈ $0.013)
-# Периоды: week / month
+# Периоды: 2weeks / month — привязаны к готовым пакетам звёзд в Stars Store
 STARS_PRICES: dict = {
-    "standard": {
-        "week":  150,   # ~$2
-        "month": 500,   # ~$6.5
-    },
     "pro": {
-        "week":  350,   # ~$4.5
-        "month": 1100,  # ~$14
+        "2weeks": 350,
+        "month":  500,
     },
 }
 
@@ -89,13 +86,6 @@ SUBSCRIPTION_FEATURES: dict = {
         "session_summary": False,
         "drop_in_talks":  False,
     },
-    "standard": {
-        "personas":       ["mrs_smith", "greg", "mark", "junior", "summer", "jane"],
-        "recasting":      True,
-        "synonym_streak": False,
-        "session_summary": True,
-        "drop_in_talks":  False,
-    },
     "pro": {
         "personas":       ["mrs_smith", "greg", "mark", "junior", "summer", "jane"],
         "recasting":      True,
@@ -104,6 +94,10 @@ SUBSCRIPTION_FEATURES: dict = {
         "drop_in_talks":  True,
     },
 }
+
+# Триал для новых пользователей — Pro сразу с момента первого сообщения
+TRIAL_PLAN = "pro"
+TRIAL_DAYS = 7
 
 def get_daily_message_limit(plan: str) -> int:
     return DAILY_MESSAGE_LIMITS.get(plan, DAILY_MESSAGE_LIMITS["free"])

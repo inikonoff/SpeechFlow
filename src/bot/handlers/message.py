@@ -32,8 +32,7 @@ from src.bot.keyboards import (
     get_tutor_keyboard,
     get_penfriend_keyboard,
     get_synonym_streak_keyboard,
-    get_paywall_keyboard,
-    get_session_summary_keyboard,
+    get_paywall_period_keyboard,
     get_session_summary_offer_keyboard,
 )
 from src.modes import MODE_TUTOR, MODE_PENFRIEND, MODE_FLOW
@@ -258,26 +257,19 @@ async def _run_level_assessment(user_id: int, current_level: str, message: Messa
 
 
 async def _show_limit_reached(message, limit_info: dict) -> None:
-    """Показывает сообщение о достижении лимита с кнопками Summary и PenFriend."""
-    from src.bot.keyboards import get_session_summary_keyboard, get_paywall_keyboard
-    plan  = limit_info.get("plan", "free")
+    """
+    Показывает сообщение о достижении дневного лимита free-плана.
+    Единственный тариф с конечным лимитом — free (Pro безлимитный),
+    так что plan здесь всегда "free" — отдельная ветка для других
+    тарифов больше не нужна с тех пор, как Standard убрали.
+    """
+    from src.bot.keyboards import get_paywall_period_keyboard
     limit = limit_info.get("limit", 10)
-
-    if plan == "free":
-        text = (
-            f"You've used all <b>{limit}</b> free messages today. 🎯\n\n"
-            f"Upgrade to continue — or come back tomorrow."
-        )
-        kb = get_paywall_keyboard(plan)
-    else:
-        text = (
-            f"You've reached your daily limit of <b>{limit}</b> messages. 🎯\n\n"
-            f"Your limit resets at midnight UTC.\n\n"
-            f"Get your <b>Session Summary</b> while you wait."
-        )
-        kb = get_session_summary_keyboard()
-
-    await message.answer(text, parse_mode="HTML", reply_markup=kb)
+    text = (
+        f"You've used all <b>{limit}</b> free messages today. 🎯\n\n"
+        f"Upgrade to continue — or come back tomorrow."
+    )
+    await message.answer(text, parse_mode="HTML", reply_markup=get_paywall_period_keyboard())
 
 
 # ─── Session Summary ──────────────────────────────────────────────────────────
@@ -396,26 +388,6 @@ async def activate_penfriend(message: Message, state: FSMContext):
         reply_markup=get_persona_keyboard(plan)
     )
 
-@router.callback_query(F.data == "switch_to_penfriend")
-async def cq_switch_to_penfriend(callback: CallbackQuery, state: FSMContext):
-    """Кнопка PenFriend на экране лимита сообщений — переключает в PenFriend Mode."""
-    try:
-        user_id = callback.from_user.id
-        user = await db.get_or_create_user(user_id)
-        plan = user.get("subscription_plan", "free")
-        await db.update_mode(user_id, MODE_PENFRIEND)
-        await state.update_data(active_mode=MODE_PENFRIEND)
-        await state.set_state(FlowState.choosing_persona)
-        await callback.answer()
-        await callback.message.answer(
-            "✉️ <b>PenFriend Mode</b>\n\nWho would you like to write to?",
-            parse_mode="HTML",
-            reply_markup=get_persona_keyboard(plan)
-        )
-    except Exception as e:
-        logger.error(f"Error in switch_to_penfriend: {e}")
-        await callback.answer("Something went wrong.", show_alert=True)
-
 @router.message(F.text == "⏹ Stop PenFriend")
 async def deactivate_penfriend(message: Message, state: FSMContext):
     await state.clear()
@@ -437,7 +409,7 @@ async def activate_synonym_streak(message: Message, state: FSMContext):
                 "🔄 <b>Synonym Streak</b> is a Pro feature — Mrs. Smith helps you find "
                 "and practice synonyms on demand.\n\nUpgrade to unlock it.",
                 parse_mode="HTML",
-                reply_markup=get_paywall_keyboard(plan)
+                reply_markup=get_paywall_period_keyboard()
             )
             return
 
@@ -609,13 +581,12 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
         user_for_plan = await db.get_or_create_user(user_id)
         plan = user_for_plan.get("subscription_plan", "free")
         if persona_key not in get_available_personas(plan):
-            from src.bot.keyboards import get_paywall_keyboard
             await callback.answer()
             await callback.message.answer(
-                f"🔒 {get_persona_display(persona_key)} is part of Standard/Pro.\n\n"
+                f"🔒 {get_persona_display(persona_key)} is a Pro feature.\n\n"
                 f"Upgrade to unlock all 6 characters.",
                 parse_mode="HTML",
-                reply_markup=get_paywall_keyboard(plan)
+                reply_markup=get_paywall_period_keyboard()
             )
             return
 

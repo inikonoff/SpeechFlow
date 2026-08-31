@@ -29,7 +29,6 @@ from src.bot.keyboards import (
     get_admin_users_keyboard,
     get_admin_user_card_keyboard,
     get_stats_back_keyboard,
-    get_paywall_keyboard,
     get_paywall_period_keyboard,
     get_paywall_success_keyboard,
 )
@@ -307,7 +306,7 @@ async def cq_admin_cycle_plan(callback: CallbackQuery):
 
         user = await db.get_or_create_user(callback.from_user.id)
         current_plan = user.get("subscription_plan") or "free"
-        cycle = {"free": "standard", "standard": "pro", "pro": "free"}
+        cycle = {"free": "pro", "pro": "free"}
         new_plan = cycle.get(current_plan, "free")
 
         # expires_at сбрасываем в None — иначе check_subscription_expired
@@ -335,74 +334,27 @@ async def cq_admin_cycle_plan(callback: CallbackQuery):
 async def cq_upgrade(callback: CallbackQuery):
     """Кнопка 'Upgrade' из любого места — показывает выбор тарифа."""
     try:
-        user = await db.get_or_create_user(callback.from_user.id)
-        plan = user.get("subscription_plan", "free")
         await safe_edit_text(
             callback.message,
-            "⭐ <b>Upgrade Speech Flow Pro</b>\n\n"
-            "<b>Standard</b>\n"
-            "• 30 messages/day\n"
-            "• All 6 characters\n"
-            "• Recasting + Session Summary\n\n"
-            "<b>Pro</b>\n"
+            "⭐ <b>Upgrade to Speech Flow Pro</b>\n\n"
             "• Unlimited messages\n"
-            "• All Standard features\n"
+            "• All 6 characters\n"
+            "• Recasting + Session Summary\n"
             "• Synonym Streak + Drop-in Talks",
             parse_mode="HTML",
-            reply_markup=get_paywall_keyboard(plan)
+            reply_markup=get_paywall_period_keyboard()
         )
         await callback.answer()
     except Exception as e:
         logger.error(f"Error in upgrade: {e}")
         await callback.answer("Error.", show_alert=True)
 
-@router.callback_query(F.data.startswith("paywall_plan_"))
-async def cq_paywall_plan(callback: CallbackQuery):
-    """Пользователь выбрал тариф — показываем выбор периода."""
-    try:
-        plan = callback.data.replace("paywall_plan_", "")
-        plan_names = {"standard": "Standard ⭐", "pro": "Pro 🌟"}
-        await safe_edit_text(
-            callback.message,
-            f"<b>{plan_names.get(plan, plan)}</b>\n\nChoose your billing period:",
-            parse_mode="HTML",
-            reply_markup=get_paywall_period_keyboard(plan)
-        )
-        await callback.answer()
-    except Exception as e:
-        logger.error(f"Error in paywall plan: {e}")
-        await callback.answer("Error.", show_alert=True)
-
-@router.callback_query(F.data == "paywall_back")
-async def cq_paywall_back(callback: CallbackQuery):
-    """Назад к выбору тарифа."""
-    try:
-        user = await db.get_or_create_user(callback.from_user.id)
-        plan = user.get("subscription_plan", "free")
-        await safe_edit_text(
-            callback.message,
-            "⭐ <b>Upgrade Speech Flow Pro</b>\n\n"
-            "<b>Standard</b>\n"
-            "• 30 messages/day\n"
-            "• All 6 characters\n"
-            "• Recasting + Session Summary\n\n"
-            "<b>Pro</b>\n"
-            "• Unlimited messages\n"
-            "• All Standard features\n"
-            "• Synonym Streak + Drop-in Talks",
-            parse_mode="HTML",
-            reply_markup=get_paywall_keyboard(plan)
-        )
-        await callback.answer()
-    except Exception as e:
-        logger.error(f"Error in paywall back: {e}")
-
 @router.callback_query(F.data.startswith("paywall_buy_"))
 async def cq_paywall_buy(callback: CallbackQuery):
     """Инициирует платёж через Telegram Stars."""
     try:
         from src.config import STARS_PRICES
-        parts = callback.data.split("_")  # paywall_buy_standard_week
+        parts = callback.data.split("_")  # paywall_buy_pro_2weeks
         plan   = parts[2]
         period = parts[3]
         prices = STARS_PRICES.get(plan, {})
@@ -411,15 +363,14 @@ async def cq_paywall_buy(callback: CallbackQuery):
             await callback.answer("Price not found.", show_alert=True)
             return
 
-        plan_names   = {"standard": "Standard", "pro": "Pro"}
-        period_names = {"week": "1 week", "month": "1 month"}
+        period_names = {"2weeks": "2 weeks", "month": "1 month"}
 
         await callback.message.answer_invoice(
-            title=f"Speech Flow Pro — {plan_names.get(plan, plan)}",
-            description=f"{period_names.get(period, period)} subscription to Speech Flow Pro {plan_names.get(plan, plan)}",
+            title="Speech Flow Pro",
+            description=f"{period_names.get(period, period)} subscription to Speech Flow Pro",
             payload=f"sub_{plan}_{period}",
             currency="XTR",           # Telegram Stars
-            prices=[{"label": f"{plan_names.get(plan)} {period_names.get(period)}", "amount": amount}],
+            prices=[{"label": f"Pro — {period_names.get(period, period)}", "amount": amount}],
             provider_token="",         # пустой для Stars
         )
         await callback.answer()
@@ -436,15 +387,14 @@ async def pre_checkout(query):
 async def successful_payment(message: Message):
     """Пользователь оплатил — активируем подписку."""
     try:
-        payload = message.successful_payment.invoice_payload  # sub_standard_week
+        payload = message.successful_payment.invoice_payload  # sub_pro_2weeks
         parts = payload.split("_")
         plan   = parts[1]
         period = parts[2]
         await db.activate_subscription(message.from_user.id, plan, period)
-        plan_names   = {"standard": "Standard ⭐", "pro": "Pro 🌟"}
-        period_names = {"week": "1 week", "month": "1 month"}
+        period_names = {"2weeks": "2 weeks", "month": "1 month"}
         await message.answer(
-            f"🎉 <b>Welcome to {plan_names.get(plan, plan)}!</b>\n\n"
+            f"🎉 <b>Welcome to Pro!</b>\n\n"
             f"Your subscription is active for {period_names.get(period, period)}.\n"
             f"Enjoy unlimited conversations!",
             parse_mode="HTML",

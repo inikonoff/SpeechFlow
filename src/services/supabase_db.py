@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone, timedelta
 from supabase import create_client, Client
 
-from src.config import settings, ADMIN_IDS
+from src.config import settings, ADMIN_IDS, TRIAL_PLAN, TRIAL_DAYS
 
 logger = logging.getLogger(__name__)
 
@@ -63,9 +63,11 @@ class SupabaseDB:
                 "english_name": None,
                 "learning_goal": None,
                 "onboarding_completed": False,
-                # Подписка
-                "subscription_plan": "free",
-                "subscription_expires_at": None,
+                # Подписка — новый юзер сразу получает триал
+                "subscription_plan": TRIAL_PLAN,
+                "subscription_expires_at": (
+                    datetime.utcnow() + timedelta(days=TRIAL_DAYS)
+                ).isoformat(),
                 # Лимиты сообщений
                 "daily_messages_used": 0,
                 "daily_messages_reset_date": datetime.utcnow().date().isoformat(),
@@ -690,13 +692,13 @@ class SupabaseDB:
     async def activate_subscription(self, telegram_id: int, plan: str, period: str) -> bool:
         """
         Активирует подписку после успешной оплаты Stars.
-        period: "week" или "month"
+        period: "2weeks" или "month"
         """
         try:
             from datetime import timedelta
             now = datetime.utcnow()
-            if period == "week":
-                expires = now + timedelta(days=7)
+            if period == "2weeks":
+                expires = now + timedelta(days=14)
             else:
                 expires = now + timedelta(days=30)
             return await self.update_user(telegram_id, {

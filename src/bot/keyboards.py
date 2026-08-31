@@ -168,47 +168,29 @@ def get_original_keyboard(message_id: int) -> InlineKeyboardMarkup:
 
 
 # ─── Paywall ─────────────────────────────────────────────────────────────────
+# Обновление: единственный платный тариф — Pro, отдельного экрана выбора
+# тарифа больше нет (раньше был Standard/Pro) — сразу период оплаты.
 
-def get_paywall_keyboard(current_plan: str = "free") -> InlineKeyboardMarkup:
-    """Выбор тарифного плана."""
+def get_paywall_period_keyboard() -> InlineKeyboardMarkup:
+    """Выбор периода Pro-подписки с ценами в Stars."""
     from src.config import STARS_PRICES
+    prices = STARS_PRICES.get("pro", {})
+    two_weeks_price = prices.get("2weeks", 0)
+    month_price     = prices.get("month", 0)
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(
-            text="⭐ Standard" + (" ✓" if current_plan == "standard" else ""),
-            callback_data="paywall_plan_standard"
-        )
-    )
-    builder.row(
-        InlineKeyboardButton(
-            text="🌟 Pro" + (" ✓" if current_plan == "pro" else ""),
-            callback_data="paywall_plan_pro"
-        )
-    )
-    builder.row(InlineKeyboardButton(text="← Back", callback_data="back_to_menu"))
-    return builder.as_markup()
-
-
-def get_paywall_period_keyboard(plan: str) -> InlineKeyboardMarkup:
-    """Выбор периода подписки с ценами в Stars."""
-    from src.config import STARS_PRICES
-    prices = STARS_PRICES.get(plan, {})
-    week_price  = prices.get("week", 0)
-    month_price = prices.get("month", 0)
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(
-            text=f"📅 1 week — {week_price} ⭐",
-            callback_data=f"paywall_buy_{plan}_week"
+            text=f"📅 2 weeks — {two_weeks_price} ⭐",
+            callback_data="paywall_buy_pro_2weeks"
         )
     )
     builder.row(
         InlineKeyboardButton(
             text=f"📆 1 month — {month_price} ⭐",
-            callback_data=f"paywall_buy_{plan}_month"
+            callback_data="paywall_buy_pro_month"
         )
     )
-    builder.row(InlineKeyboardButton(text="← Back", callback_data="paywall_back"))
+    builder.row(InlineKeyboardButton(text="← Back", callback_data="back_to_menu"))
     return builder.as_markup()
 
 
@@ -220,16 +202,8 @@ def get_paywall_success_keyboard() -> InlineKeyboardMarkup:
 
 
 # ─── Session Summary ──────────────────────────────────────────────────────────
-
-def get_session_summary_keyboard() -> InlineKeyboardMarkup:
-    """Кнопка под последним сообщением сессии при достижении лимита."""
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text="🎙 Session Summary", callback_data="session_summary"),
-        InlineKeyboardButton(text="✉️ PenFriend",        callback_data="switch_to_penfriend"),
-    )
-    return builder.as_markup()
-
+# Единственный вход теперь — предложение при "⏹ Stop Tutor" (лимит free
+# больше не ведёт сюда: с уходом Standard он просто показывает paywall).
 
 def get_session_summary_offer_keyboard() -> InlineKeyboardMarkup:
     """Предложение саммари при выходе из Tutor Mode кнопкой Stop."""
