@@ -1285,31 +1285,39 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
             return {"assessed_level": current_level, "confidence": "low"}
 
 
-    async def generate_session_analysis(self, messages: list) -> str:
+    async def generate_session_voice_summary(self, messages: list) -> str:
         """
-        Анализирует сессию и возвращает текстовый разбор:
-        темы разговора, ошибки пользователя, прогресс.
-        Используется в Session Summary PDF.
+        Личное голосовое саммари сессии от Mrs. Smith — то, что она сказала бы
+        вслух на прощание, а не письменный отчёт. Заменяет PDF-версию
+        Session Summary: юзер получает голосовое (+ те же кнопки Text/
+        Translate, что и у любого другого голосового ответа).
         """
         user_messages = [m["content"] for m in messages if m.get("role") == "user"]
         if not user_messages:
-            return "No user messages to analyze."
+            return (
+                "We haven't talked enough yet for a proper summary — "
+                "let's have a real conversation first, and I'll have plenty to say."
+            )
 
         sample = "\n".join(f"- {m}" for m in user_messages[-20:])
 
         system = (
-            "You are an English language coach analyzing a student's conversation session.\n\n"
-            "Write a concise Session Analysis in English. Structure:\n\n"
-            "TOPICS DISCUSSED\n"
-            "List the main topics covered in the conversation.\n\n"
-            "LANGUAGE OBSERVATIONS\n"
-            "Note patterns in the student's English: strengths, recurring errors, vocabulary range.\n\n"
-            "PROGRESS NOTES\n"
-            "One or two sentences on what went well and what to focus on next.\n\n"
-            "Keep it factual, warm, and under 200 words total. No bullet points — use plain prose."
+            "You are Mrs. Smith, a warm and experienced English teacher, speaking "
+            "directly to your student as a short voice message at the end of a "
+            "practice session — not writing a report, actually talking to them.\n\n"
+            "Cover, in flowing spoken prose:\n"
+            "- What you talked about together this session\n"
+            "- Their general level and how their English sounded today\n"
+            "- One or two things they're doing well — genuine and specific, not generic praise\n"
+            "- One or two things worth practicing next time\n\n"
+            "Speak TO them, in second person ('you'), the way a real teacher wraps up "
+            "a conversation — warm, honest, not a checklist and not a grade.\n"
+            "This will be read aloud by text-to-speech: no markdown, no headers, "
+            "no bullet points, no numbered lists — just natural spoken sentences.\n"
+            "150-220 words."
         )
 
-        async def _analyze(client):
+        async def _summary(client):
             response = await client.chat.completions.create(
                 model="openai/gpt-oss-120b",
                 extra_body={"include_reasoning": False},
@@ -1317,16 +1325,19 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                     {"role": "system", "content": system},
                     {"role": "user",   "content": f"Student messages from this session:\n{sample}"},
                 ],
-                temperature=0.3,
-                max_tokens=600,
+                temperature=0.6,
+                max_tokens=500,
             )
-            return self._extract_text(response, "generate_session_analysis")
+            return self._extract_text(response, "generate_session_voice_summary")
 
         try:
-            return await self._make_request(_analyze)
+            return await self._make_request(_summary)
         except Exception as e:
-            logger.error(f"Error in generate_session_analysis: {e}")
-            return "Analysis unavailable."
+            logger.error(f"Error in generate_session_voice_summary: {e}")
+            return (
+                "I couldn't put together a proper summary right now — but I've "
+                "been paying attention, and it shows. Let's pick this up again soon."
+            )
 
     async def generate_synonym_lesson(self, user_message: str, level: str) -> Dict[str, Any]:
         """

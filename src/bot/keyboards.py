@@ -220,8 +220,18 @@ def get_session_summary_keyboard() -> InlineKeyboardMarkup:
     """Кнопка под последним сообщением сессии при достижении лимита."""
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text="📄 Session Summary", callback_data="session_summary"),
-        InlineKeyboardButton(text="✉️ PenFriend",       callback_data="switch_to_penfriend"),
+        InlineKeyboardButton(text="🎙 Session Summary", callback_data="session_summary"),
+        InlineKeyboardButton(text="✉️ PenFriend",        callback_data="switch_to_penfriend"),
+    )
+    return builder.as_markup()
+
+
+def get_session_summary_offer_keyboard() -> InlineKeyboardMarkup:
+    """Предложение саммари при выходе из Tutor Mode кнопкой Stop."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🎙 Yes, please",   callback_data="session_summary"),
+        InlineKeyboardButton(text="No, thanks",       callback_data="session_summary_skip"),
     )
     return builder.as_markup()
 

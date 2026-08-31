@@ -29,10 +29,12 @@ from src.bot.keyboards import (
     get_flow_user_voice_translate_keyboard,
     get_persona_keyboard,
     get_mode_keyboard,
+    get_tutor_keyboard,
     get_penfriend_keyboard,
     get_synonym_streak_keyboard,
     get_paywall_keyboard,
     get_session_summary_keyboard,
+    get_session_summary_offer_keyboard,
 )
 from src.modes import MODE_TUTOR, MODE_PENFRIEND, MODE_FLOW
 from src.utils.tg_helpers import safe_edit_text, safe_edit_reply_markup, safe_edit_caption
@@ -264,8 +266,7 @@ async def _show_limit_reached(message, limit_info: dict) -> None:
     if plan == "free":
         text = (
             f"You've used all <b>{limit}</b> free messages today. 🎯\n\n"
-            f"Upgrade to continue — or come back tomorrow.\n\n"
-            f"You can also download your <b>Session Summary</b> below."
+            f"Upgrade to continue — or come back tomorrow."
         )
         kb = get_paywall_keyboard(plan)
     else:
@@ -281,106 +282,60 @@ async def _show_limit_reached(message, limit_info: dict) -> None:
 
 # ─── Session Summary ──────────────────────────────────────────────────────────
 
-async def _generate_session_summary_pdf(user_id: int, messages: list) -> bytes:
-    """Генерирует PDF с транскриптом и LLM анализом сессии."""
-    try:
-        import io
-        from reportlab.lib.pagesizes import A4
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.lib.units import cm
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
-        from reportlab.lib.enums import TA_CENTER
-        from reportlab.lib import colors
-        from datetime import datetime
-
-        analysis = await groq_client.generate_session_analysis(messages)
-
-        buf = io.BytesIO()
-        doc = SimpleDocTemplate(buf, pagesize=A4,
-            leftMargin=2*cm, rightMargin=2*cm,
-            topMargin=2*cm, bottomMargin=2*cm)
-
-        styles = getSampleStyleSheet()
-        title_style   = ParagraphStyle('Title2',   parent=styles['Title'],
-                            fontSize=16, spaceAfter=6, alignment=TA_CENTER)
-        subtitle_style = ParagraphStyle('Sub',     parent=styles['Normal'],
-                            fontSize=10, textColor=colors.grey, alignment=TA_CENTER, spaceAfter=16)
-        section_style = ParagraphStyle('Sec',      parent=styles['Heading2'],
-                            fontSize=12, spaceBefore=12, spaceAfter=6,
-                            textColor=colors.HexColor('#1a1a2e'))
-        user_style    = ParagraphStyle('User',     parent=styles['Normal'],
-                            fontSize=10, spaceAfter=4,
-                            textColor=colors.HexColor('#2d5986'))
-        bot_style     = ParagraphStyle('Bot',      parent=styles['Normal'],
-                            fontSize=10, leftIndent=20, spaceAfter=8)
-        analysis_style = ParagraphStyle('Ana',     parent=styles['Normal'],
-                            fontSize=10, spaceAfter=6, leading=14)
-
-        def esc(t): return t.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
-
-        story = [
-            Paragraph("Speech Flow Pro", title_style),
-            Paragraph(f"Session Summary · {datetime.utcnow().strftime('%B %d, %Y')}", subtitle_style),
-            HRFlowable(width="100%", thickness=1, color=colors.lightgrey),
-            Spacer(1, 12),
-            Paragraph("Transcript", section_style),
-        ]
-
-        for msg in messages:
-            role = msg.get("role", "")
-            text = esc(msg.get("content", ""))
-            if role == "user":
-                story.append(Paragraph(f"<b>You:</b> {text}", user_style))
-            elif role == "assistant":
-                story.append(Paragraph(f"<b>Mrs. Smith:</b> {text}", bot_style))
-
-        story += [
-            Spacer(1, 12),
-            HRFlowable(width="100%", thickness=1, color=colors.lightgrey),
-            Spacer(1, 12),
-            Paragraph("Session Analysis", section_style),
-        ]
-        for line in analysis.split("\n"):
-            if line.strip():
-                story.append(Paragraph(esc(line), analysis_style))
-
-        doc.build(story)
-        return buf.getvalue()
-
-    except Exception as e:
-        logger.error(f"Error generating session PDF: {e}")
-        return None
-
-
 @router.callback_query(F.data == "session_summary")
 async def cq_session_summary(callback: CallbackQuery, state: FSMContext):
-    """Генерирует и отправляет PDF сессии."""
+    """
+    Генерирует и отправляет голосовое саммари сессии от Mrs. Smith —
+    личное сообщение, не документ. Под голосовым — те же кнопки
+    Text/Translate, что и у любого другого голосового ответа в приложении.
+    """
     try:
         user_id = callback.from_user.id
-        await callback.answer()
-        await callback.message.answer("Generating your Session Summary...")
+        await callback.answer("Mrs. Smith is putting it together…")
+        await safe_edit_reply_markup(callback.message, reply_markup=None)
 
         messages = await db.get_messages_for_summary(user_id, limit=50)
         if not messages:
             await callback.message.answer("No messages to summarize yet.")
             return
 
-        pdf_bytes = await _generate_session_summary_pdf(user_id, messages)
-        if not pdf_bytes:
-            await callback.message.answer("Failed to generate PDF. Please try again.")
-            return
+        summary_text = await groq_client.generate_session_voice_summary(messages)
+        persona_display = get_persona_display("mrs_smith")
 
-        from aiogram.types import BufferedInputFile
-        from datetime import datetime
-        filename = f"session_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.pdf"
-        await callback.message.answer_document(
-            BufferedInputFile(pdf_bytes, filename=filename),
-            caption="Your Session Summary is ready!"
-        )
+        voice_bytes = await groq_client.text_to_speech(summary_text, voice="diana")
+        if voice_bytes:
+            voice_file = BufferedInputFile(voice_bytes, filename="session_summary.wav")
+            sent = await callback.message.answer_voice(
+                voice_file,
+                caption=f"{persona_display} — Session Summary",
+                reply_markup=get_flow_voice_keyboard(0)
+            )
+            _cache_original(sent.message_id, summary_text)
+            _cache_persona_display(sent.message_id, persona_display)
+            await safe_edit_reply_markup(sent, reply_markup=get_flow_voice_keyboard(sent.message_id))
+        else:
+            safe_text = html.escape(summary_text)
+            sent = await callback.message.answer(
+                f"💬 {safe_text}\n\n<i>{persona_display}</i>",
+                parse_mode="HTML"
+            )
+            _cache_original(sent.message_id, summary_text)
+            _cache_persona_display(sent.message_id, persona_display)
+            await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
 
     except Exception as e:
         logger.error(f"Error in session_summary: {e}")
         await callback.message.answer("Something went wrong.")
+
+
+@router.callback_query(F.data == "session_summary_skip")
+async def cq_session_summary_skip(callback: CallbackQuery):
+    """Юзер отказался от саммари при выходе из Tutor Mode."""
+    try:
+        await callback.answer()
+        await safe_edit_reply_markup(callback.message, reply_markup=None)
+    except Exception as e:
+        logger.error(f"Error in session_summary_skip: {e}")
 
 
 # ─── Mode activation ──────────────────────────────────────────────────────────
@@ -409,13 +364,24 @@ async def activate_tutor(message: Message, state: FSMContext):
     await message.answer(
         "🎓 Tutor Mode on — 📚 Mrs. Smith",
         parse_mode="HTML",
-        reply_markup=get_mode_keyboard()
+        reply_markup=get_tutor_keyboard()
     )
 
 @router.message(F.text == "⏹ Stop Tutor")
 async def deactivate_tutor(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("⏹ Tutor Mode off", reply_markup=get_mode_keyboard())
+
+    user_id = message.from_user.id
+    user = await db.get_or_create_user(user_id)
+    plan = user.get("subscription_plan", "free")
+    if has_feature(plan, "session_summary"):
+        history = await db.get_messages_for_summary(user_id, limit=1)
+        if history:
+            await message.answer(
+                "📚 Want a quick Session Summary from Mrs. Smith before you go?",
+                reply_markup=get_session_summary_offer_keyboard()
+            )
 
 @router.message(F.text == "✉️ PenFriend")
 async def activate_penfriend(message: Message, state: FSMContext):
