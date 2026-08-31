@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone, timedelta
 from supabase import create_client, Client
 
-from src.config import settings, ADMIN_IDS
+from src.config import settings, ADMIN_IDS, TRIAL_PLAN, TRIAL_DAYS
 
 logger = logging.getLogger(__name__)
 
@@ -63,9 +63,11 @@ class SupabaseDB:
                 "english_name": None,
                 "learning_goal": None,
                 "onboarding_completed": False,
-                # Подписка
-                "subscription_plan": "free",
-                "subscription_expires_at": None,
+                # Подписка — новый юзер сразу получает триал
+                "subscription_plan": TRIAL_PLAN,
+                "subscription_expires_at": (
+                    datetime.utcnow() + timedelta(days=TRIAL_DAYS)
+                ).isoformat(),
                 # Лимиты сообщений
                 "daily_messages_used": 0,
                 "daily_messages_reset_date": datetime.utcnow().date().isoformat(),
@@ -559,9 +561,10 @@ class SupabaseDB:
                 if not cat or cat.lower() == "none":
                     continue
                 if cat not in grouped:
-                    grouped[cat] = {"category": cat, "examples": []}
+                    grouped[cat] = {"category": cat, "examples": [], "corrected_examples": []}
                 if row.get("mistake_text"):
                     grouped[cat]["examples"].append(row["mistake_text"])
+                    grouped[cat]["corrected_examples"].append(row.get("corrected_text") or "")
 
             return list(grouped.values())
         except Exception as e:
@@ -650,6 +653,8 @@ class SupabaseDB:
         try:
             from src.config import get_daily_message_limit
             user = await self.get_or_create_user(telegram_id)
+            if await self.check_subscription_expired(telegram_id):
+                user["subscription_plan"] = "free"
             plan = user.get("subscription_plan", "free")
             limit = get_daily_message_limit(plan)
             today = datetime.utcnow().date().isoformat()
@@ -687,13 +692,13 @@ class SupabaseDB:
     async def activate_subscription(self, telegram_id: int, plan: str, period: str) -> bool:
         """
         Активирует подписку после успешной оплаты Stars.
-        period: "week" или "month"
+        period: "2weeks" или "month"
         """
         try:
             from datetime import timedelta
             now = datetime.utcnow()
-            if period == "week":
-                expires = now + timedelta(days=7)
+            if period == "2weeks":
+                expires = now + timedelta(days=14)
             else:
                 expires = now + timedelta(days=30)
             return await self.update_user(telegram_id, {

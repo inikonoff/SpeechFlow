@@ -13,6 +13,7 @@ import asyncio
 import logging
 import json
 import re
+import html
 from typing import List, Optional, Dict, Any, Tuple
 from openai import AsyncOpenAI
 
@@ -87,6 +88,21 @@ class GroqClient:
         cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
         cleaned = re.sub(r'^.*?</think>', '', cleaned, flags=re.DOTALL)
         return cleaned.strip()
+
+    def _extract_text(self, response, label: str = "response") -> str:
+        """
+        Достаёт текст ответа, чистит протёкший reasoning через _strip_think
+        и считает пустой результат сбоем — тот же баг Groq (см. выше) иногда
+        съедает весь max_tokens на reasoning и не оставляет ничего после
+        стрипа. Без этой проверки пустая строка тихо уходит дальше (в TTS,
+        который упадёт на "input is required", или прямо юзеру пустым
+        сообщением) вместо того, чтобы сработал fallback вызывающей функции.
+        """
+        text = self._strip_think(response.choices[0].message.content)
+        text = text.strip() if text else text
+        if not text:
+            raise ValueError(f"Empty response after stripping reasoning ({label})")
+        return text
 
     async def _get_next_client(self) -> Optional[AsyncOpenAI]:
         if not self.clients:
@@ -279,9 +295,9 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 extra_body={"include_reasoning": False},
                 messages=messages,
                 temperature=0.9,
-                max_tokens=300
+                max_tokens=450
             )
-            return self._strip_think(response.choices[0].message.content)
+            return self._extract_text(response, "generate_flow_response")
 
         try:
             return await self._make_request(_flow)
@@ -340,9 +356,9 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 extra_body={"include_reasoning": False},
                 messages=messages,
                 temperature=0.85,
-                max_tokens=200
+                max_tokens=320
             )
-            return self._strip_think(response.choices[0].message.content)
+            return self._extract_text(response, "generate_penfriend_response")
 
         try:
             return await self._make_request(_penfriend)
@@ -379,9 +395,9 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                     {"role": "user", "content": "[start the conversation]"}
                 ],
                 temperature=0.9,
-                max_tokens=100
+                max_tokens=180
             )
-            return self._strip_think(response.choices[0].message.content)
+            return self._extract_text(response, "generate_switch_opener")
 
         try:
             return await self._make_request(_opener)
@@ -436,9 +452,9 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                     {"role": "user", "content": context_instruction}
                 ],
                 temperature=0.9,
-                max_tokens=100
+                max_tokens=180
             )
-            return self._strip_think(response.choices[0].message.content)
+            return self._extract_text(response, "generate_persona_greeting")
 
         try:
             return await self._make_request(_greeting)
@@ -465,9 +481,9 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                     {"role": "user", "content": text}
                 ],
                 temperature=0.0,
-                max_tokens=5
+                max_tokens=40
             )
-            return self._strip_think(response.choices[0].message.content).strip().lower().startswith("yes")
+            return self._extract_text(response, "detect_farewell").lower().startswith("yes")
 
         try:
             return await self._make_request(_detect)
@@ -613,9 +629,9 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                     {"role": "user", "content": data_summary}
                 ],
                 temperature=0.7,
-                max_tokens=250
+                max_tokens=380
             )
-            return self._strip_think(response.choices[0].message.content.strip())
+            return self._extract_text(response, "generate_stats_deep_dive")
 
         try:
             return await self._make_request(_deep_dive)
@@ -636,15 +652,22 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
         mrs_smith_prompt = _get_tutor_prompt("mrs_smith")
 
         msgs_this_week = stats.get("msgs_this_week", 0)
-        streak = stats.get("streak_days", 0)
+        streak = stats.get("user", {}).get("streak_days", 0)
 
-        # Реальные фразы пользователя — не придуманные примеры
+        # Реальные фразы пользователя — не придуманные примеры.
+        # Экранируем HTML здесь же: LLM ниже просят дословно процитировать эти
+        # фразы в <blockquote>, а финальный текст рендерится в Telegram с
+        # parse_mode=HTML без повторного экранирования (см. cq_stats_deep/
+        # cq_stats_original в menu.py) — так что если в реплике пользователя
+        # случайно оказались "<"/">"/"&", это должно быть безопасно уже здесь.
         if errors:
             patterns_lines = []
             for e in errors[:4]:
                 cat = e.get("category", "").strip()
-                mistake = e.get("examples", [None])[0] if e.get("examples") else None
-                corrected = e.get("corrected_text", "") or ""
+                examples = e.get("examples") or []
+                corrected_examples = e.get("corrected_examples") or []
+                mistake = html.escape(examples[0]) if examples and examples[0] else None
+                corrected = html.escape(corrected_examples[0]) if corrected_examples and corrected_examples[0] else ""
                 if not cat:
                     continue
                 if mistake and corrected:
@@ -696,9 +719,9 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                     {"role": "user", "content": "[write the deep dive]"}
                 ],
                 temperature=0.8,
-                max_tokens=500
+                max_tokens=700
             )
-            raw = response.choices[0].message.content.strip()
+            raw = self._extract_text(response, "generate_sunday_deep_dive")
             # Страховка: убираем markdown если LLM всё равно добавил
             raw = re.sub(r'^#{1,3}\s*', '', raw, flags=re.MULTILINE)
             raw = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', raw)
@@ -829,9 +852,9 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                     {"role": "user", "content": "[write the message]"}
                 ],
                 temperature=0.9,
-                max_tokens=120
+                max_tokens=260
             )
-            return self._strip_think(response.choices[0].message.content.strip())
+            return self._extract_text(response, "generate_re_engagement_notification")
 
         try:
             return await self._make_request(_notify)
@@ -874,9 +897,9 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                     {"role": "user", "content": text}
                 ],
                 temperature=0.1,
-                max_tokens=400
+                max_tokens=550
             )
-            return self._strip_think(response.choices[0].message.content)
+            return self._extract_text(response, "translate_text")
 
         try:
             return await self._make_request(_translate)
@@ -969,9 +992,9 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 extra_body={"include_reasoning": False},
                 messages=messages,
                 temperature=0.75,
-                max_tokens=300
+                max_tokens=450
             )
-            return self._strip_think(response.choices[0].message.content)
+            return self._extract_text(response, "generate_tutor_response")
 
         try:
             return await self._make_request(_chat)
@@ -1060,9 +1083,9 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                     {"role": "user",   "content": user_msg},
                 ],
                 temperature=0.8,
-                max_tokens=80,
+                max_tokens=160,
             )
-            return self._strip_think(response.choices[0].message.content.strip())
+            return self._extract_text(response, "generate_level_change_reaction")
 
         try:
             return await self._make_request(_react)
@@ -1207,7 +1230,7 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         Возвращает:
         {
-            "assessed_level": "intermediate",  # beginner/elementary/intermediate/advanced
+            "assessed_level": "intermediate",  # beginner/intermediate/advanced
             "confidence": "high"               # high/low
         }
         Если confidence != "high" или assessed_level == current_level → ничего не делать.
@@ -1225,10 +1248,9 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
 
         system = (
             "You assess English proficiency from a sample of spoken/written messages.\n\n"
-            "Levels: beginner, elementary, intermediate, advanced\n\n"
+            "Levels: beginner, intermediate, advanced\n\n"
             "Criteria:\n"
             "- beginner: very simple sentences, many basic errors, limited vocabulary\n"
-            "- elementary: simple sentences with common errors, basic vocabulary\n"
             "- intermediate: mostly correct sentences, some grammar issues, decent vocabulary\n"
             "- advanced: complex sentences, rare errors, wide vocabulary, natural flow\n\n"
             "confidence = 'high' only if the sample clearly and consistently matches a level.\n"
@@ -1263,31 +1285,39 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
             return {"assessed_level": current_level, "confidence": "low"}
 
 
-    async def generate_session_analysis(self, messages: list) -> str:
+    async def generate_session_voice_summary(self, messages: list) -> str:
         """
-        Анализирует сессию и возвращает текстовый разбор:
-        темы разговора, ошибки пользователя, прогресс.
-        Используется в Session Summary PDF.
+        Личное голосовое саммари сессии от Mrs. Smith — то, что она сказала бы
+        вслух на прощание, а не письменный отчёт. Заменяет PDF-версию
+        Session Summary: юзер получает голосовое (+ те же кнопки Text/
+        Translate, что и у любого другого голосового ответа).
         """
         user_messages = [m["content"] for m in messages if m.get("role") == "user"]
         if not user_messages:
-            return "No user messages to analyze."
+            return (
+                "We haven't talked enough yet for a proper summary — "
+                "let's have a real conversation first, and I'll have plenty to say."
+            )
 
         sample = "\n".join(f"- {m}" for m in user_messages[-20:])
 
         system = (
-            "You are an English language coach analyzing a student's conversation session.\n\n"
-            "Write a concise Session Analysis in English. Structure:\n\n"
-            "TOPICS DISCUSSED\n"
-            "List the main topics covered in the conversation.\n\n"
-            "LANGUAGE OBSERVATIONS\n"
-            "Note patterns in the student's English: strengths, recurring errors, vocabulary range.\n\n"
-            "PROGRESS NOTES\n"
-            "One or two sentences on what went well and what to focus on next.\n\n"
-            "Keep it factual, warm, and under 200 words total. No bullet points — use plain prose."
+            "You are Mrs. Smith, a warm and experienced English teacher, speaking "
+            "directly to your student as a short voice message at the end of a "
+            "practice session — not writing a report, actually talking to them.\n\n"
+            "Cover, in flowing spoken prose:\n"
+            "- What you talked about together this session\n"
+            "- Their general level and how their English sounded today\n"
+            "- One or two things they're doing well — genuine and specific, not generic praise\n"
+            "- One or two things worth practicing next time\n\n"
+            "Speak TO them, in second person ('you'), the way a real teacher wraps up "
+            "a conversation — warm, honest, not a checklist and not a grade.\n"
+            "This will be read aloud by text-to-speech: no markdown, no headers, "
+            "no bullet points, no numbered lists — just natural spoken sentences.\n"
+            "150-220 words."
         )
 
-        async def _analyze(client):
+        async def _summary(client):
             response = await client.chat.completions.create(
                 model="openai/gpt-oss-120b",
                 extra_body={"include_reasoning": False},
@@ -1295,16 +1325,19 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                     {"role": "system", "content": system},
                     {"role": "user",   "content": f"Student messages from this session:\n{sample}"},
                 ],
-                temperature=0.3,
-                max_tokens=400,
+                temperature=0.6,
+                max_tokens=500,
             )
-            return self._strip_think(response.choices[0].message.content.strip())
+            return self._extract_text(response, "generate_session_voice_summary")
 
         try:
-            return await self._make_request(_analyze)
+            return await self._make_request(_summary)
         except Exception as e:
-            logger.error(f"Error in generate_session_analysis: {e}")
-            return "Analysis unavailable."
+            logger.error(f"Error in generate_session_voice_summary: {e}")
+            return (
+                "I couldn't put together a proper summary right now — but I've "
+                "been paying attention, and it shows. Let's pick this up again soon."
+            )
 
     async def generate_synonym_lesson(self, user_message: str, level: str) -> Dict[str, Any]:
         """

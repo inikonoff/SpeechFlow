@@ -12,7 +12,7 @@ from aiogram.fsm.context import FSMContext
 from src.bot.handlers.states import FlowState, SynonymStreakState
 from typing import Dict, Any
 
-from src.config import settings, ADMIN_IDS, has_feature
+from src.config import settings, ADMIN_IDS, has_feature, get_available_personas
 from src.services.supabase_db import db
 from src.services.groq_client import groq_client
 from src.utils.audio import save_voice_file, cleanup_file, read_file_bytes
@@ -29,10 +29,11 @@ from src.bot.keyboards import (
     get_flow_user_voice_translate_keyboard,
     get_persona_keyboard,
     get_mode_keyboard,
+    get_tutor_keyboard,
     get_penfriend_keyboard,
     get_synonym_streak_keyboard,
-    get_paywall_keyboard,
-    get_session_summary_keyboard,
+    get_paywall_period_keyboard,
+    get_session_summary_offer_keyboard,
 )
 from src.modes import MODE_TUTOR, MODE_PENFRIEND, MODE_FLOW
 from src.utils.tg_helpers import safe_edit_text, safe_edit_reply_markup, safe_edit_caption
@@ -207,7 +208,7 @@ async def _background_flow_error_check(user_id: int, user_text: str, user_level:
 
 # ─── Автооценка уровня (fire-and-forget) ─────────────────────────────────────
 
-LEVEL_ORDER = ["beginner", "elementary", "intermediate", "advanced"]
+LEVEL_ORDER = ["beginner", "intermediate", "advanced"]
 
 async def _run_level_assessment(user_id: int, current_level: str, message: Message) -> None:
     """
@@ -256,131 +257,77 @@ async def _run_level_assessment(user_id: int, current_level: str, message: Messa
 
 
 async def _show_limit_reached(message, limit_info: dict) -> None:
-    """Показывает сообщение о достижении лимита с кнопками Summary и PenFriend."""
-    from src.bot.keyboards import get_session_summary_keyboard, get_paywall_keyboard
-    plan  = limit_info.get("plan", "free")
+    """
+    Показывает сообщение о достижении дневного лимита free-плана.
+    Единственный тариф с конечным лимитом — free (Pro безлимитный),
+    так что plan здесь всегда "free" — отдельная ветка для других
+    тарифов больше не нужна с тех пор, как Standard убрали.
+    """
+    from src.bot.keyboards import get_paywall_period_keyboard
     limit = limit_info.get("limit", 10)
-
-    if plan == "free":
-        text = (
-            f"You've used all <b>{limit}</b> free messages today. 🎯\n\n"
-            f"Upgrade to continue — or come back tomorrow.\n\n"
-            f"You can also download your <b>Session Summary</b> below."
-        )
-        kb = get_paywall_keyboard(plan)
-    else:
-        text = (
-            f"You've reached your daily limit of <b>{limit}</b> messages. 🎯\n\n"
-            f"Your limit resets at midnight UTC.\n\n"
-            f"Get your <b>Session Summary</b> while you wait."
-        )
-        kb = get_session_summary_keyboard()
-
-    await message.answer(text, parse_mode="HTML", reply_markup=kb)
+    text = (
+        f"You've used all <b>{limit}</b> free messages today. 🎯\n\n"
+        f"Upgrade to continue — or come back tomorrow."
+    )
+    await message.answer(text, parse_mode="HTML", reply_markup=get_paywall_period_keyboard())
 
 
 # ─── Session Summary ──────────────────────────────────────────────────────────
 
-async def _generate_session_summary_pdf(user_id: int, messages: list) -> bytes:
-    """Генерирует PDF с транскриптом и LLM анализом сессии."""
-    try:
-        import io
-        from reportlab.lib.pagesizes import A4
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.lib.units import cm
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
-        from reportlab.lib.enums import TA_CENTER
-        from reportlab.lib import colors
-        from datetime import datetime
-
-        analysis = await groq_client.generate_session_analysis(messages)
-
-        buf = io.BytesIO()
-        doc = SimpleDocTemplate(buf, pagesize=A4,
-            leftMargin=2*cm, rightMargin=2*cm,
-            topMargin=2*cm, bottomMargin=2*cm)
-
-        styles = getSampleStyleSheet()
-        title_style   = ParagraphStyle('Title2',   parent=styles['Title'],
-                            fontSize=16, spaceAfter=6, alignment=TA_CENTER)
-        subtitle_style = ParagraphStyle('Sub',     parent=styles['Normal'],
-                            fontSize=10, textColor=colors.grey, alignment=TA_CENTER, spaceAfter=16)
-        section_style = ParagraphStyle('Sec',      parent=styles['Heading2'],
-                            fontSize=12, spaceBefore=12, spaceAfter=6,
-                            textColor=colors.HexColor('#1a1a2e'))
-        user_style    = ParagraphStyle('User',     parent=styles['Normal'],
-                            fontSize=10, spaceAfter=4,
-                            textColor=colors.HexColor('#2d5986'))
-        bot_style     = ParagraphStyle('Bot',      parent=styles['Normal'],
-                            fontSize=10, leftIndent=20, spaceAfter=8)
-        analysis_style = ParagraphStyle('Ana',     parent=styles['Normal'],
-                            fontSize=10, spaceAfter=6, leading=14)
-
-        def esc(t): return t.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
-
-        story = [
-            Paragraph("Speech Flow Pro", title_style),
-            Paragraph(f"Session Summary · {datetime.utcnow().strftime('%B %d, %Y')}", subtitle_style),
-            HRFlowable(width="100%", thickness=1, color=colors.lightgrey),
-            Spacer(1, 12),
-            Paragraph("Transcript", section_style),
-        ]
-
-        for msg in messages:
-            role = msg.get("role", "")
-            text = esc(msg.get("content", ""))
-            if role == "user":
-                story.append(Paragraph(f"<b>You:</b> {text}", user_style))
-            elif role == "assistant":
-                story.append(Paragraph(f"<b>Mrs. Smith:</b> {text}", bot_style))
-
-        story += [
-            Spacer(1, 12),
-            HRFlowable(width="100%", thickness=1, color=colors.lightgrey),
-            Spacer(1, 12),
-            Paragraph("Session Analysis", section_style),
-        ]
-        for line in analysis.split("\n"):
-            if line.strip():
-                story.append(Paragraph(esc(line), analysis_style))
-
-        doc.build(story)
-        return buf.getvalue()
-
-    except Exception as e:
-        logger.error(f"Error generating session PDF: {e}")
-        return None
-
-
 @router.callback_query(F.data == "session_summary")
 async def cq_session_summary(callback: CallbackQuery, state: FSMContext):
-    """Генерирует и отправляет PDF сессии."""
+    """
+    Генерирует и отправляет голосовое саммари сессии от Mrs. Smith —
+    личное сообщение, не документ. Под голосовым — те же кнопки
+    Text/Translate, что и у любого другого голосового ответа в приложении.
+    """
     try:
         user_id = callback.from_user.id
-        await callback.answer()
-        await callback.message.answer("Generating your Session Summary...")
+        await callback.answer("Mrs. Smith is putting it together…")
+        await safe_edit_reply_markup(callback.message, reply_markup=None)
 
         messages = await db.get_messages_for_summary(user_id, limit=50)
         if not messages:
             await callback.message.answer("No messages to summarize yet.")
             return
 
-        pdf_bytes = await _generate_session_summary_pdf(user_id, messages)
-        if not pdf_bytes:
-            await callback.message.answer("Failed to generate PDF. Please try again.")
-            return
+        summary_text = await groq_client.generate_session_voice_summary(messages)
+        persona_display = get_persona_display("mrs_smith")
 
-        from aiogram.types import BufferedInputFile
-        from datetime import datetime
-        filename = f"session_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.pdf"
-        await callback.message.answer_document(
-            BufferedInputFile(pdf_bytes, filename=filename),
-            caption="Your Session Summary is ready!"
-        )
+        voice_bytes = await groq_client.text_to_speech(summary_text, voice="diana")
+        if voice_bytes:
+            voice_file = BufferedInputFile(voice_bytes, filename="session_summary.wav")
+            sent = await callback.message.answer_voice(
+                voice_file,
+                caption=f"{persona_display} — Session Summary",
+                reply_markup=get_flow_voice_keyboard(0)
+            )
+            _cache_original(sent.message_id, summary_text)
+            _cache_persona_display(sent.message_id, persona_display)
+            await safe_edit_reply_markup(sent, reply_markup=get_flow_voice_keyboard(sent.message_id))
+        else:
+            safe_text = html.escape(summary_text)
+            sent = await callback.message.answer(
+                f"💬 {safe_text}\n\n<i>{persona_display}</i>",
+                parse_mode="HTML"
+            )
+            _cache_original(sent.message_id, summary_text)
+            _cache_persona_display(sent.message_id, persona_display)
+            await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
 
     except Exception as e:
         logger.error(f"Error in session_summary: {e}")
         await callback.message.answer("Something went wrong.")
+
+
+@router.callback_query(F.data == "session_summary_skip")
+async def cq_session_summary_skip(callback: CallbackQuery):
+    """Юзер отказался от саммари при выходе из Tutor Mode."""
+    try:
+        await callback.answer()
+        await safe_edit_reply_markup(callback.message, reply_markup=None)
+    except Exception as e:
+        logger.error(f"Error in session_summary_skip: {e}")
 
 
 # ─── Mode activation ──────────────────────────────────────────────────────────
@@ -388,9 +335,11 @@ async def cq_session_summary(callback: CallbackQuery, state: FSMContext):
 
 @router.message(F.text == "🎙 Flow")
 async def activate_flow(message: Message, state: FSMContext):
+    user = await db.get_or_create_user(message.from_user.id)
+    plan = user.get("subscription_plan", "free")
     await state.update_data(active_mode=MODE_FLOW)
     await state.set_state(FlowState.choosing_persona)
-    await message.answer("Who would you like to talk to?", reply_markup=get_persona_keyboard())
+    await message.answer("Who would you like to talk to?", reply_markup=get_persona_keyboard(plan))
 
 @router.message(F.text == "⏹ Stop Flow")
 async def deactivate_flow(message: Message, state: FSMContext):
@@ -407,7 +356,7 @@ async def activate_tutor(message: Message, state: FSMContext):
     await message.answer(
         "🎓 Tutor Mode on — 📚 Mrs. Smith",
         parse_mode="HTML",
-        reply_markup=get_mode_keyboard()
+        reply_markup=get_tutor_keyboard()
     )
 
 @router.message(F.text == "⏹ Stop Tutor")
@@ -415,15 +364,28 @@ async def deactivate_tutor(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("⏹ Tutor Mode off", reply_markup=get_mode_keyboard())
 
+    user_id = message.from_user.id
+    user = await db.get_or_create_user(user_id)
+    plan = user.get("subscription_plan", "free")
+    if has_feature(plan, "session_summary"):
+        history = await db.get_messages_for_summary(user_id, limit=1)
+        if history:
+            await message.answer(
+                "📚 Want a quick Session Summary from Mrs. Smith before you go?",
+                reply_markup=get_session_summary_offer_keyboard()
+            )
+
 @router.message(F.text == "✉️ PenFriend")
 async def activate_penfriend(message: Message, state: FSMContext):
+    user = await db.get_or_create_user(message.from_user.id)
+    plan = user.get("subscription_plan", "free")
     await db.update_mode(message.from_user.id, MODE_PENFRIEND)
     await state.update_data(active_mode=MODE_PENFRIEND)
     await state.set_state(FlowState.choosing_persona)
     await message.answer(
         "✉️ <b>PenFriend Mode</b>\n\nWho would you like to write to?",
         parse_mode="HTML",
-        reply_markup=get_persona_keyboard()
+        reply_markup=get_persona_keyboard(plan)
     )
 
 @router.message(F.text == "⏹ Stop PenFriend")
@@ -447,7 +409,7 @@ async def activate_synonym_streak(message: Message, state: FSMContext):
                 "🔄 <b>Synonym Streak</b> is a Pro feature — Mrs. Smith helps you find "
                 "and practice synonyms on demand.\n\nUpgrade to unlock it.",
                 parse_mode="HTML",
-                reply_markup=get_paywall_keyboard(plan)
+                reply_markup=get_paywall_period_keyboard()
             )
             return
 
@@ -592,6 +554,9 @@ async def flow_switch_reply(message: Message, state: FSMContext):
         fsm_data = await state.get_data()
         current_mode = fsm_data.get("active_mode", MODE_FLOW)
 
+        user = await db.get_or_create_user(user_id)
+        plan = user.get("subscription_plan", "free")
+
         history = await db.get_history(user_id, limit=settings.CONTEXT_WINDOW)
         context_text = " | ".join([
             f"{m['role']}: {m['content']}" for m in history
@@ -599,7 +564,7 @@ async def flow_switch_reply(message: Message, state: FSMContext):
 
         await state.update_data(switch_context=context_text, active_mode=current_mode)
         await state.set_state(FlowState.choosing_persona)
-        await message.answer("Who would you like to talk to next?", reply_markup=get_persona_keyboard())
+        await message.answer("Who would you like to talk to next?", reply_markup=get_persona_keyboard(plan))
     except Exception as e:
         logger.error(f"Error in flow switch reply: {e}")
         await message.answer("Something went wrong. Try again.")
@@ -612,6 +577,18 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
         persona_key = callback.data.split("_", 1)[1]
         user_id = callback.from_user.id
         voice = get_persona_voice(persona_key)
+
+        user_for_plan = await db.get_or_create_user(user_id)
+        plan = user_for_plan.get("subscription_plan", "free")
+        if persona_key not in get_available_personas(plan):
+            await callback.answer()
+            await callback.message.answer(
+                f"🔒 {get_persona_display(persona_key)} is a Pro feature.\n\n"
+                f"Upgrade to unlock all 6 characters.",
+                parse_mode="HTML",
+                reply_markup=get_paywall_period_keyboard()
+            )
+            return
 
         fsm_data = await state.get_data()
         switch_context = fsm_data.get("switch_context", "")
@@ -629,11 +606,12 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
             notif = user.get("notifications_enabled", True)
             recasting = user.get("recasting_enabled", False)
             practice = user.get("mistakes_practice_enabled", False)
+            settings_plan = user.get("subscription_plan") or "free"
             await safe_edit_text(
                 callback.message,
                 f"👤 Now talking to {display_name}.\n\n⚙️ <b>Settings</b>",
                 parse_mode="HTML",
-                reply_markup=get_settings_keyboard(notif, recasting, practice, user_id)
+                reply_markup=get_settings_keyboard(notif, recasting, practice, user_id, settings_plan)
             )
             await callback.answer()
             return
@@ -688,6 +666,13 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
                 _cache_original(sent.message_id, greeting)
                 _cache_persona_display(sent.message_id, persona_display)
                 await safe_edit_reply_markup(sent, reply_markup=get_flow_voice_keyboard(sent.message_id))
+            else:
+                # Fallback — текст, если TTS не сработал
+                safe_greeting = html.escape(greeting)
+                sent = await callback.message.answer(f"💬 {safe_greeting}\n\n<i>{persona_display}</i>", parse_mode="HTML")
+                _cache_original(sent.message_id, greeting)
+                _cache_persona_display(sent.message_id, persona_display)
+                await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
         else:
             safe_greeting = html.escape(greeting)
             sent = await callback.message.answer(f"💬 {safe_greeting}\n\n<i>{persona_display}</i>", parse_mode="HTML")
@@ -715,6 +700,21 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
         persona_key = fsm_data.get("persona_key") or user.get("persona", "greg")
         voice = fsm_data.get("voice") or get_persona_voice(persona_key)
         active_mode = fsm_data.get("active_mode", MODE_FLOW)
+
+        # Персонаж мог стать недоступен уже ПОСЛЕ выбора (например, закончился
+        # триал) — flow_persona_selected проверяет план только в момент
+        # переключения, здесь перепроверяем на каждое сообщение, иначе
+        # разговор с запертым персонажем продолжался бы бесконечно.
+        plan = user.get("subscription_plan") or "free"
+        if persona_key not in get_available_personas(plan):
+            await message.answer(
+                f"🔒 Your access to {get_persona_display(persona_key)} has ended — "
+                f"this character is part of Pro.\n\n"
+                f"Upgrade to keep talking to them, or press ↩ Switch to pick an available character.",
+                parse_mode="HTML",
+                reply_markup=get_paywall_period_keyboard()
+            )
+            return
 
         # PenFriend — только текст
         if active_mode == MODE_PENFRIEND and message.voice:
@@ -917,6 +917,18 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
                 _cache_original(sent.message_id, chat_response)
                 _cache_persona_display(sent.message_id, persona_display)
                 await safe_edit_reply_markup(sent, reply_markup=get_flow_voice_keyboard(sent.message_id))
+            else:
+                # Fallback — текст, если TTS не сработал (Flow голосовой, но не оставлять юзера без ответа)
+                safe_response = html.escape(chat_response)
+                display_response = _md_bold_to_html(safe_response)
+                sent = await message.answer(
+                    f"💬 {display_response}\n\n<i>{html.escape(persona_display)}</i>",
+                    parse_mode="HTML"
+                )
+                _cache_original(sent.message_id, chat_response)
+                _cache_display(sent.message_id, display_response)
+                _cache_persona_display(sent.message_id, persona_display)
+                await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
 
         if is_farewell:
             asyncio.create_task(run_summarization(user_id))
@@ -1081,11 +1093,12 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
             (settings.VOICE_RESPONSE_MODE == "mirror" and is_voice_input)
         )
 
+        persona_display = get_persona_display(user.get("persona", "mrs_smith"))
+        voice_sent = False
         if should_reply_voice:
             await message.bot.send_chat_action(user_id, "record_voice")
             voice_bytes_out = await groq_client.text_to_speech(chat_response, voice=voice)
             if voice_bytes_out:
-                persona_display = get_persona_display(user.get("persona", "mrs_smith"))
                 voice_file_out = BufferedInputFile(voice_bytes_out, filename="response.wav")
                 sent_voice = await message.answer_voice(
                     voice_file_out,
@@ -1097,10 +1110,13 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
                     sent_voice,
                     reply_markup=get_flow_voice_keyboard(sent_voice.message_id)
                 )
-        else:
+                voice_sent = True
+
+        if not voice_sent:
+            # Либо голос выключен настройкой, либо TTS не сработал — в обоих
+            # случаях юзер должен получить хоть какой-то ответ текстом.
             safe_response = html.escape(chat_response)
             display_response = _md_bold_to_html(safe_response)
-            persona_display = get_persona_display(user.get("persona", "mrs_smith"))
             sent = await message.answer(f"💬 {display_response}\n\n<i>{html.escape(persona_display)}</i>", parse_mode="HTML")
             _cache_original(sent.message_id, chat_response)
             _cache_display(sent.message_id, display_response)

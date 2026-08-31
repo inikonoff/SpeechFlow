@@ -29,7 +29,6 @@ from src.bot.keyboards import (
     get_admin_users_keyboard,
     get_admin_user_card_keyboard,
     get_stats_back_keyboard,
-    get_paywall_keyboard,
     get_paywall_period_keyboard,
     get_paywall_success_keyboard,
 )
@@ -85,10 +84,11 @@ async def cmd_settings(message: Message):
     notif     = user.get("notifications_enabled", True)
     recasting = user.get("recasting_enabled", False)
     practice  = user.get("mistakes_practice_enabled", False)
+    plan      = user.get("subscription_plan") or "free"
     await message.answer(
         "⚙️ <b>Settings</b>",
         parse_mode="HTML",
-        reply_markup=get_settings_keyboard(notif, recasting, practice, message.from_user.id)
+        reply_markup=get_settings_keyboard(notif, recasting, practice, message.from_user.id, plan)
     )
 
 @router.message(Command("support"))
@@ -226,11 +226,12 @@ async def show_settings(callback: CallbackQuery):
         notif     = user.get("notifications_enabled", True)
         recasting = user.get("recasting_enabled", False)
         practice  = user.get("mistakes_practice_enabled", False)
+        plan      = user.get("subscription_plan") or "free"
         await safe_edit_text(
             callback.message,
             "⚙️ <b>Settings</b>",
             parse_mode="HTML",
-            reply_markup=get_settings_keyboard(notif, recasting, practice, callback.from_user.id)
+            reply_markup=get_settings_keyboard(notif, recasting, practice, callback.from_user.id, plan)
         )
         await callback.answer()
     except Exception as e:
@@ -249,9 +250,10 @@ async def toggle_notifications(callback: CallbackQuery):
 
         recasting = user.get("recasting_enabled", False)
         practice  = user.get("mistakes_practice_enabled", False)
+        plan      = user.get("subscription_plan") or "free"
         await safe_edit_reply_markup(
             callback.message,
-            reply_markup=get_settings_keyboard(new_value, recasting, practice, callback.from_user.id)
+            reply_markup=get_settings_keyboard(new_value, recasting, practice, callback.from_user.id, plan)
         )
     except Exception as e:
         logger.error(f"Error toggling notifications: {e}")
@@ -267,9 +269,10 @@ async def cq_toggle_recasting(callback: CallbackQuery):
         user = await db.get_or_create_user(callback.from_user.id)
         notif = user.get("notifications_enabled", True)
         practice  = user.get("mistakes_practice_enabled", False)
+        plan      = user.get("subscription_plan") or "free"
         await safe_edit_reply_markup(
             callback.message,
-            reply_markup=get_settings_keyboard(notif, new_val, practice, callback.from_user.id)
+            reply_markup=get_settings_keyboard(notif, new_val, practice, callback.from_user.id, plan)
         )
     except Exception as e:
         logger.error(f"Error toggling recasting: {e}")
@@ -284,12 +287,45 @@ async def cq_toggle_mistakes_practice(callback: CallbackQuery):
         user = await db.get_or_create_user(callback.from_user.id)
         notif     = user.get("notifications_enabled", True)
         recasting = user.get("recasting_enabled", False)
+        plan      = user.get("subscription_plan") or "free"
         await safe_edit_reply_markup(
             callback.message,
-            reply_markup=get_settings_keyboard(notif, recasting, new_val, callback.from_user.id)
+            reply_markup=get_settings_keyboard(notif, recasting, new_val, callback.from_user.id, plan)
         )
     except Exception as e:
         logger.error(f"Error toggling mistakes practice: {e}")
+        await callback.answer("Error.", show_alert=True)
+
+@router.callback_query(F.data == "admin_cycle_plan")
+async def cq_admin_cycle_plan(callback: CallbackQuery):
+    """Только для ADMIN_IDS: циклический переключатель тарифа для тестирования платных фич."""
+    try:
+        if callback.from_user.id not in ADMIN_IDS:
+            await callback.answer("⛔ Admin only.", show_alert=True)
+            return
+
+        user = await db.get_or_create_user(callback.from_user.id)
+        current_plan = user.get("subscription_plan") or "free"
+        cycle = {"free": "pro", "pro": "free"}
+        new_plan = cycle.get(current_plan, "free")
+
+        # expires_at сбрасываем в None — иначе check_subscription_expired
+        # откатит тестовый план обратно на free при следующей проверке лимита.
+        await db.update_user(callback.from_user.id, {
+            "subscription_plan": new_plan,
+            "subscription_expires_at": None,
+        })
+        await callback.answer(f"Test plan → {new_plan.capitalize()}", show_alert=False)
+
+        notif     = user.get("notifications_enabled", True)
+        recasting = user.get("recasting_enabled", False)
+        practice  = user.get("mistakes_practice_enabled", False)
+        await safe_edit_reply_markup(
+            callback.message,
+            reply_markup=get_settings_keyboard(notif, recasting, practice, callback.from_user.id, new_plan)
+        )
+    except Exception as e:
+        logger.error(f"Error cycling admin test plan: {e}")
         await callback.answer("Error.", show_alert=True)
 
 # ─── Paywall ──────────────────────────────────────────────────────────────────
@@ -298,74 +334,27 @@ async def cq_toggle_mistakes_practice(callback: CallbackQuery):
 async def cq_upgrade(callback: CallbackQuery):
     """Кнопка 'Upgrade' из любого места — показывает выбор тарифа."""
     try:
-        user = await db.get_or_create_user(callback.from_user.id)
-        plan = user.get("subscription_plan", "free")
         await safe_edit_text(
             callback.message,
-            "⭐ <b>Upgrade Speech Flow Pro</b>\n\n"
-            "<b>Standard</b>\n"
-            "• 30 messages/day\n"
-            "• All 6 characters\n"
-            "• Recasting + Session Summary\n\n"
-            "<b>Pro</b>\n"
+            "⭐ <b>Upgrade to Speech Flow Pro</b>\n\n"
             "• Unlimited messages\n"
-            "• All Standard features\n"
+            "• All 6 characters\n"
+            "• Recasting + Session Summary\n"
             "• Synonym Streak + Drop-in Talks",
             parse_mode="HTML",
-            reply_markup=get_paywall_keyboard(plan)
+            reply_markup=get_paywall_period_keyboard()
         )
         await callback.answer()
     except Exception as e:
         logger.error(f"Error in upgrade: {e}")
         await callback.answer("Error.", show_alert=True)
 
-@router.callback_query(F.data.startswith("paywall_plan_"))
-async def cq_paywall_plan(callback: CallbackQuery):
-    """Пользователь выбрал тариф — показываем выбор периода."""
-    try:
-        plan = callback.data.replace("paywall_plan_", "")
-        plan_names = {"standard": "Standard ⭐", "pro": "Pro 🌟"}
-        await safe_edit_text(
-            callback.message,
-            f"<b>{plan_names.get(plan, plan)}</b>\n\nChoose your billing period:",
-            parse_mode="HTML",
-            reply_markup=get_paywall_period_keyboard(plan)
-        )
-        await callback.answer()
-    except Exception as e:
-        logger.error(f"Error in paywall plan: {e}")
-        await callback.answer("Error.", show_alert=True)
-
-@router.callback_query(F.data == "paywall_back")
-async def cq_paywall_back(callback: CallbackQuery):
-    """Назад к выбору тарифа."""
-    try:
-        user = await db.get_or_create_user(callback.from_user.id)
-        plan = user.get("subscription_plan", "free")
-        await safe_edit_text(
-            callback.message,
-            "⭐ <b>Upgrade Speech Flow Pro</b>\n\n"
-            "<b>Standard</b>\n"
-            "• 30 messages/day\n"
-            "• All 6 characters\n"
-            "• Recasting + Session Summary\n\n"
-            "<b>Pro</b>\n"
-            "• Unlimited messages\n"
-            "• All Standard features\n"
-            "• Synonym Streak + Drop-in Talks",
-            parse_mode="HTML",
-            reply_markup=get_paywall_keyboard(plan)
-        )
-        await callback.answer()
-    except Exception as e:
-        logger.error(f"Error in paywall back: {e}")
-
 @router.callback_query(F.data.startswith("paywall_buy_"))
 async def cq_paywall_buy(callback: CallbackQuery):
     """Инициирует платёж через Telegram Stars."""
     try:
         from src.config import STARS_PRICES
-        parts = callback.data.split("_")  # paywall_buy_standard_week
+        parts = callback.data.split("_")  # paywall_buy_pro_2weeks
         plan   = parts[2]
         period = parts[3]
         prices = STARS_PRICES.get(plan, {})
@@ -374,15 +363,14 @@ async def cq_paywall_buy(callback: CallbackQuery):
             await callback.answer("Price not found.", show_alert=True)
             return
 
-        plan_names   = {"standard": "Standard", "pro": "Pro"}
-        period_names = {"week": "1 week", "month": "1 month"}
+        period_names = {"2weeks": "2 weeks", "month": "1 month"}
 
         await callback.message.answer_invoice(
-            title=f"Speech Flow Pro — {plan_names.get(plan, plan)}",
-            description=f"{period_names.get(period, period)} subscription to Speech Flow Pro {plan_names.get(plan, plan)}",
+            title="Speech Flow Pro",
+            description=f"{period_names.get(period, period)} subscription to Speech Flow Pro",
             payload=f"sub_{plan}_{period}",
             currency="XTR",           # Telegram Stars
-            prices=[{"label": f"{plan_names.get(plan)} {period_names.get(period)}", "amount": amount}],
+            prices=[{"label": f"Pro — {period_names.get(period, period)}", "amount": amount}],
             provider_token="",         # пустой для Stars
         )
         await callback.answer()
@@ -399,15 +387,14 @@ async def pre_checkout(query):
 async def successful_payment(message: Message):
     """Пользователь оплатил — активируем подписку."""
     try:
-        payload = message.successful_payment.invoice_payload  # sub_standard_week
+        payload = message.successful_payment.invoice_payload  # sub_pro_2weeks
         parts = payload.split("_")
         plan   = parts[1]
         period = parts[2]
         await db.activate_subscription(message.from_user.id, plan, period)
-        plan_names   = {"standard": "Standard ⭐", "pro": "Pro 🌟"}
-        period_names = {"week": "1 week", "month": "1 month"}
+        period_names = {"2weeks": "2 weeks", "month": "1 month"}
         await message.answer(
-            f"🎉 <b>Welcome to {plan_names.get(plan, plan)}!</b>\n\n"
+            f"🎉 <b>Welcome to Pro!</b>\n\n"
             f"Your subscription is active for {period_names.get(period, period)}.\n"
             f"Enjoy unlimited conversations!",
             parse_mode="HTML",
@@ -542,6 +529,13 @@ async def show_admin_user_card(callback: CallbackQuery):
         created = (user.get("created_at") or "")[:10] or "—"
         last_active = (user.get("last_active") or "")[:10] or "—"
 
+        plan = user.get("subscription_plan") or "free"
+        plan_icon = "🌟" if plan == "pro" else "🆓"
+        plan_line = f"{plan_icon} Тариф: <b>{plan.capitalize()}</b>"
+        expires_at = user.get("subscription_expires_at")
+        if plan != "free" and expires_at:
+            plan_line += f" (до {expires_at[:10]})"
+
         mode_icons = {"tutor": "🎓", "penfriend": "✉️", "flow": "🎙"}
         persona_icons = {
             "greg": "🏥", "mark": "🍳", "junior": "💻",
@@ -551,6 +545,7 @@ async def show_admin_user_card(callback: CallbackQuery):
         text = (
             f"👤 <b>{html.escape(name)}</b> {html.escape(username)}\n"
             f"🆔 <code>{telegram_id}</code>\n\n"
+            f"{plan_line}\n"
             f"📚 Уровень: <b>{level}</b>\n"
             f"🗂 Режим: {mode_icons.get(mode, '')} <b>{mode.capitalize()}</b>\n"
             f"🎭 Персонаж: {persona_icons.get(persona.lower(), '👤')} <b>{persona}</b>\n\n"
@@ -577,11 +572,12 @@ async def back_to_settings(callback: CallbackQuery):
         notif     = user.get("notifications_enabled", True)
         recasting = user.get("recasting_enabled", False)
         practice  = user.get("mistakes_practice_enabled", False)
+        plan      = user.get("subscription_plan") or "free"
         await safe_edit_text(
             callback.message,
             "⚙️ <b>Settings</b>",
             parse_mode="HTML",
-            reply_markup=get_settings_keyboard(notif, recasting, practice, callback.from_user.id)
+            reply_markup=get_settings_keyboard(notif, recasting, practice, callback.from_user.id, plan)
         )
         await callback.answer()
     except Exception as e:
@@ -668,14 +664,18 @@ async def cq_stats_deep(callback: CallbackQuery):
         # Добавляем ошибки за неделю для более глубокого анализа
         errors = await db.get_weekly_errors_for_report(user_id)
 
-        # Если есть ошибки — используем sunday deep dive формат (с примерами)
-        # Если нет — используем stats deep dive (нарративный)
+        # Если есть ошибки — используем sunday deep dive формат (с примерами).
+        # Он уже возвращает готовый HTML (<blockquote>/<b>), пользовательский
+        # текст экранирован внутри generate_sunday_deep_dive — повторный
+        # html.escape() здесь сломал бы разметку.
+        # Если ошибок нет — используем stats deep dive (чистая проза без
+        # HTML-тегов), её как раз нужно экранировать перед рендером.
         if errors:
             deep_text = await groq_client.generate_sunday_deep_dive(stats, errors)
+            safe = deep_text
         else:
             deep_text = await groq_client.generate_stats_deep_dive(stats)
-
-        safe = html.escape(deep_text)
+            safe = html.escape(deep_text)
         msg_id = callback.message.message_id
 
         await safe_edit_text(
@@ -705,6 +705,40 @@ async def cq_stats_quick(callback: CallbackQuery):
         await callback.answer()
     except Exception as e:
         logger.error(f"Error in stats_quick: {e}")
+        await callback.answer("Error.", show_alert=True)
+
+@router.callback_query(F.data == "my_practice_log")
+async def cq_my_practice_log(callback: CallbackQuery):
+    """Список последних залогированных ошибок юзера (кнопка 'My Mistakes' в /stats)."""
+    try:
+        user_id = callback.from_user.id
+        errors = await db.get_recent_errors(user_id, limit=10)
+        msg_id = callback.message.message_id
+
+        if not errors:
+            text = "📋 <b>My Mistakes</b>\n\nNo mistakes logged yet — keep practicing!"
+        else:
+            lines = ["📋 <b>My Mistakes</b>\n"]
+            for e in errors:
+                cat = html.escape(str(e.get("category") or "grammar").strip())
+                mistake = html.escape(str(e.get("mistake_text") or "").strip())
+                corrected = html.escape(str(e.get("corrected_text") or "").strip())
+                if not mistake:
+                    continue
+                line = f"• <b>{cat}</b>: \"{mistake}\""
+                if corrected:
+                    line += f" → \"{corrected}\""
+                lines.append(line)
+            text = "\n".join(lines)
+
+        await safe_edit_text(
+            callback.message, text,
+            parse_mode="HTML",
+            reply_markup=get_stats_back_keyboard(msg_id, "quick")
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in my_practice_log: {e}")
         await callback.answer("Error.", show_alert=True)
 
 @router.callback_query(F.data.startswith("stats_translate_"))
@@ -742,9 +776,10 @@ async def cq_stats_original(callback: CallbackQuery):
             errors = await db.get_weekly_errors_for_report(user_id)
             if errors:
                 deep_text = await groq_client.generate_sunday_deep_dive(stats, errors)
+                safe = deep_text  # уже готовый HTML, экранировано внутри groq_client
             else:
                 deep_text = await groq_client.generate_stats_deep_dive(stats)
-            safe = html.escape(deep_text)
+                safe = html.escape(deep_text)  # чистая проза без HTML-тегов
             text = f"📚 <b>Mrs. Smith's Note</b>\n\n{safe}"
         else:
             text = _build_quick_stats(stats)
