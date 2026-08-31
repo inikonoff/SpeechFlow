@@ -89,6 +89,21 @@ class GroqClient:
         cleaned = re.sub(r'^.*?</think>', '', cleaned, flags=re.DOTALL)
         return cleaned.strip()
 
+    def _extract_text(self, response, label: str = "response") -> str:
+        """
+        Достаёт текст ответа, чистит протёкший reasoning через _strip_think
+        и считает пустой результат сбоем — тот же баг Groq (см. выше) иногда
+        съедает весь max_tokens на reasoning и не оставляет ничего после
+        стрипа. Без этой проверки пустая строка тихо уходит дальше (в TTS,
+        который упадёт на "input is required", или прямо юзеру пустым
+        сообщением) вместо того, чтобы сработал fallback вызывающей функции.
+        """
+        text = self._strip_think(response.choices[0].message.content)
+        text = text.strip() if text else text
+        if not text:
+            raise ValueError(f"Empty response after stripping reasoning ({label})")
+        return text
+
     async def _get_next_client(self) -> Optional[AsyncOpenAI]:
         if not self.clients:
             return None
@@ -280,9 +295,9 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 extra_body={"include_reasoning": False},
                 messages=messages,
                 temperature=0.9,
-                max_tokens=300
+                max_tokens=450
             )
-            return self._strip_think(response.choices[0].message.content)
+            return self._extract_text(response, "generate_flow_response")
 
         try:
             return await self._make_request(_flow)
@@ -341,9 +356,9 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 extra_body={"include_reasoning": False},
                 messages=messages,
                 temperature=0.85,
-                max_tokens=200
+                max_tokens=320
             )
-            return self._strip_think(response.choices[0].message.content)
+            return self._extract_text(response, "generate_penfriend_response")
 
         try:
             return await self._make_request(_penfriend)
@@ -380,9 +395,9 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                     {"role": "user", "content": "[start the conversation]"}
                 ],
                 temperature=0.9,
-                max_tokens=100
+                max_tokens=180
             )
-            return self._strip_think(response.choices[0].message.content)
+            return self._extract_text(response, "generate_switch_opener")
 
         try:
             return await self._make_request(_opener)
@@ -437,9 +452,9 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                     {"role": "user", "content": context_instruction}
                 ],
                 temperature=0.9,
-                max_tokens=100
+                max_tokens=180
             )
-            return self._strip_think(response.choices[0].message.content)
+            return self._extract_text(response, "generate_persona_greeting")
 
         try:
             return await self._make_request(_greeting)
@@ -466,9 +481,9 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                     {"role": "user", "content": text}
                 ],
                 temperature=0.0,
-                max_tokens=5
+                max_tokens=40
             )
-            return self._strip_think(response.choices[0].message.content).strip().lower().startswith("yes")
+            return self._extract_text(response, "detect_farewell").lower().startswith("yes")
 
         try:
             return await self._make_request(_detect)
@@ -614,9 +629,9 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                     {"role": "user", "content": data_summary}
                 ],
                 temperature=0.7,
-                max_tokens=250
+                max_tokens=380
             )
-            return self._strip_think(response.choices[0].message.content.strip())
+            return self._extract_text(response, "generate_stats_deep_dive")
 
         try:
             return await self._make_request(_deep_dive)
@@ -837,15 +852,9 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                     {"role": "user", "content": "[write the message]"}
                 ],
                 temperature=0.9,
-                max_tokens=200
+                max_tokens=260
             )
-            text = self._strip_think(response.choices[0].message.content.strip())
-            if not text:
-                # Groq gpt-oss-120b иногда тратит весь max_tokens на reasoning
-                # и не оставляет текста после стрипа <think> — считаем это сбоем,
-                # чтобы сработал fallback ниже, а не ушло пустое сообщение юзеру.
-                raise ValueError("Empty response after stripping reasoning")
-            return text
+            return self._extract_text(response, "generate_re_engagement_notification")
 
         try:
             return await self._make_request(_notify)
@@ -888,9 +897,9 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                     {"role": "user", "content": text}
                 ],
                 temperature=0.1,
-                max_tokens=400
+                max_tokens=550
             )
-            return self._strip_think(response.choices[0].message.content)
+            return self._extract_text(response, "translate_text")
 
         try:
             return await self._make_request(_translate)
@@ -983,9 +992,9 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                 extra_body={"include_reasoning": False},
                 messages=messages,
                 temperature=0.75,
-                max_tokens=300
+                max_tokens=450
             )
-            return self._strip_think(response.choices[0].message.content)
+            return self._extract_text(response, "generate_tutor_response")
 
         try:
             return await self._make_request(_chat)
@@ -1074,9 +1083,9 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                     {"role": "user",   "content": user_msg},
                 ],
                 temperature=0.8,
-                max_tokens=80,
+                max_tokens=160,
             )
-            return self._strip_think(response.choices[0].message.content.strip())
+            return self._extract_text(response, "generate_level_change_reaction")
 
         try:
             return await self._make_request(_react)
@@ -1309,9 +1318,9 @@ Advanced: flag subtle but real errors (wrong preposition, wrong tense aspect).
                     {"role": "user",   "content": f"Student messages from this session:\n{sample}"},
                 ],
                 temperature=0.3,
-                max_tokens=400,
+                max_tokens=600,
             )
-            return self._strip_think(response.choices[0].message.content.strip())
+            return self._extract_text(response, "generate_session_analysis")
 
         try:
             return await self._make_request(_analyze)
