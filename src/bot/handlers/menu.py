@@ -603,7 +603,6 @@ async def start_broadcast(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Error.", show_alert=True)
 
 @router.message(AdminState.waiting_broadcast)
-@router.message(AdminState.waiting_broadcast)
 async def handle_broadcast_message(message: Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS:
         return

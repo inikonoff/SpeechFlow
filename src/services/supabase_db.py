@@ -521,11 +521,21 @@ class SupabaseDB:
             return False
 
     async def get_top_error_categories(self, user_id: int, limit: int = 2) -> List[str]:
-        """Топ категорий ошибок для подсказки модели в Flow Mode."""
+        """
+        Топ категорий ошибок для подсказки модели в Flow Mode.
+        Смотрим только последние 30 дней (свежие паттерны важнее старых)
+        и ограничиваем выборку сверху — раньше тянули вообще всю историю
+        ошибок юзера на каждый Flow-ответ, что со временем стало бы
+        всё медленнее и дороже без всякой пользы для актуальности подсказки.
+        """
         try:
+            cutoff = (datetime.utcnow() - timedelta(days=30)).isoformat()
             response = (self.client.table("error_logs")
                         .select("category")
                         .eq("user_id", user_id)
+                        .gte("created_at", cutoff)
+                        .order("created_at", desc=True)
+                        .limit(500)
                         .execute())
             if not response.data:
                 return []
@@ -640,9 +650,6 @@ class SupabaseDB:
     async def set_learning_goal(self, telegram_id: int, goal: str) -> bool:
         return await self.update_user(telegram_id, {"learning_goal": goal})
 
-    async def complete_onboarding(self, telegram_id: int) -> bool:
-        return await self.update_user(telegram_id, {"onboarding_completed": True})
-
     # ─── Лимиты сообщений ──────────────────────────────────────────────────────
 
     async def check_message_limit(self, telegram_id: int) -> dict:
@@ -728,20 +735,6 @@ class SupabaseDB:
         except Exception as e:
             logger.error(f"Error checking subscription: {e}")
             return False
-
-    # ─── Счётчик сообщений для автооценки уровня ───────────────────────────────
-
-    async def get_user_message_count(self, user_id: int) -> int:
-        try:
-            response = (self.client.table("messages")
-                        .select("id", count="exact")
-                        .eq("user_id", user_id)
-                        .eq("role", "user")
-                        .execute())
-            return response.count or 0
-        except Exception as e:
-            logger.error(f"Error getting message count: {e}")
-            return 0
 
 
 db = SupabaseDB()
