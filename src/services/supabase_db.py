@@ -307,15 +307,49 @@ class SupabaseDB:
 
     # ─── История сообщений ──────────────────────────────────────────────────
 
-    async def save_message(self, user_id: int, role: str, content: str, tokens: int = 0):
+    async def save_message(self, user_id: int, role: str, content: str, tokens: int = 0) -> Optional[str]:
+        """Возвращает id сохранённой строки — используется, чтобы позже
+        привязать к ней telegram_message_id через set_message_telegram_id."""
         try:
-            self.client.table("messages").insert({
+            response = self.client.table("messages").insert({
                 "user_id": user_id,
                 "role": role,
                 "content": content,
             }).execute()
+            return response.data[0]["id"] if response.data else None
         except Exception as e:
             logger.error(f"Error saving message: {e}")
+            return None
+
+    async def set_message_telegram_id(self, message_row_id: str, telegram_message_id: int) -> bool:
+        """
+        Привязывает Telegram message_id к уже сохранённому сообщению —
+        так Text/Translate продолжают находить текст даже после
+        рестарта процесса, когда in-memory кэш (_originals_cache в
+        message.py) уже пуст.
+        """
+        try:
+            self.client.table("messages").update(
+                {"telegram_message_id": telegram_message_id}
+            ).eq("id", message_row_id).execute()
+            return True
+        except Exception as e:
+            logger.error(f"Error setting telegram_message_id: {e}")
+            return False
+
+    async def get_message_by_telegram_id(self, user_id: int, telegram_message_id: int) -> Optional[str]:
+        """Фоллбэк для Text/Translate, когда in-memory кэш промахнулся."""
+        try:
+            response = (self.client.table("messages")
+                        .select("content")
+                        .eq("user_id", user_id)
+                        .eq("telegram_message_id", telegram_message_id)
+                        .limit(1)
+                        .execute())
+            return response.data[0]["content"] if response.data else None
+        except Exception as e:
+            logger.error(f"Error getting message by telegram_id: {e}")
+            return None
 
     async def get_history(self, user_id: int, limit: int = 5) -> List[Dict[str, str]]:
         try:

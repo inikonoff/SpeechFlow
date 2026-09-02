@@ -10,7 +10,7 @@ from aiogram import Router, F
 from aiogram.types import Message, BufferedInputFile, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from src.bot.handlers.states import FlowState, SynonymStreakState
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from src.config import settings, ADMIN_IDS, has_feature, get_available_personas
 from src.services.supabase_db import db
@@ -60,6 +60,18 @@ def _cache_original(msg_id: int, text: str):
     if len(_originals_cache) > 5000:
         _originals_cache.clear()
     _originals_cache[msg_id] = text
+
+def _link_message(msg_id: int, text: str, saved_row_id: Optional[str]) -> None:
+    """
+    Кэш в памяти процесса (как раньше) + фоновая привязка telegram
+    message_id к уже сохранённой строке в БД. In-memory кэш обнуляется
+    при рестарте/редеплое — привязка в БД переживает его, и Text/
+    Translate продолжают работать через db.get_message_by_telegram_id
+    как фоллбэк (см. handle_translate/flow_translate/flow_show_text).
+    """
+    _cache_original(msg_id, text)
+    if saved_row_id:
+        asyncio.create_task(db.set_message_telegram_id(saved_row_id, msg_id))
 
 def _cache_translation(msg_id: int, text: str):
     if len(_translation_cache) > 5000:
@@ -642,7 +654,7 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
                 summary=existing_summary
             )
 
-        await db.save_message(user_id, "assistant", greeting)
+        greeting_row_id = await db.save_message(user_id, "assistant", greeting)
         persona_display = get_persona_display(persona_key)
 
         if active_mode == MODE_PENFRIEND:
@@ -663,20 +675,20 @@ async def flow_persona_selected(callback: CallbackQuery, state: FSMContext):
                     caption=persona_display,
                     reply_markup=get_flow_voice_keyboard(0)
                 )
-                _cache_original(sent.message_id, greeting)
+                _link_message(sent.message_id, greeting, greeting_row_id)
                 _cache_persona_display(sent.message_id, persona_display)
                 await safe_edit_reply_markup(sent, reply_markup=get_flow_voice_keyboard(sent.message_id))
             else:
                 # Fallback — текст, если TTS не сработал
                 safe_greeting = html.escape(greeting)
                 sent = await callback.message.answer(f"💬 {safe_greeting}\n\n<i>{persona_display}</i>", parse_mode="HTML")
-                _cache_original(sent.message_id, greeting)
+                _link_message(sent.message_id, greeting, greeting_row_id)
                 _cache_persona_display(sent.message_id, persona_display)
                 await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
         else:
             safe_greeting = html.escape(greeting)
             sent = await callback.message.answer(f"💬 {safe_greeting}\n\n<i>{persona_display}</i>", parse_mode="HTML")
-            _cache_original(sent.message_id, greeting)
+            _link_message(sent.message_id, greeting, greeting_row_id)
             _cache_persona_display(sent.message_id, persona_display)
             await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
 
@@ -826,7 +838,7 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
                 _background_flow_error_check(user_id, user_text, user_level)
             )
 
-        await db.save_message(user_id, "assistant", chat_response)
+        chat_response_row_id = await db.save_message(user_id, "assistant", chat_response)
         persona_display = get_persona_display(persona_key)
 
         if active_mode == MODE_PENFRIEND:
@@ -914,7 +926,7 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
                     caption=persona_display,
                     reply_markup=get_flow_voice_keyboard(0)
                 )
-                _cache_original(sent.message_id, chat_response)
+                _link_message(sent.message_id, chat_response, chat_response_row_id)
                 _cache_persona_display(sent.message_id, persona_display)
                 await safe_edit_reply_markup(sent, reply_markup=get_flow_voice_keyboard(sent.message_id))
             else:
@@ -925,7 +937,7 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
                     f"💬 {display_response}\n\n<i>{html.escape(persona_display)}</i>",
                     parse_mode="HTML"
                 )
-                _cache_original(sent.message_id, chat_response)
+                _link_message(sent.message_id, chat_response, chat_response_row_id)
                 _cache_display(sent.message_id, display_response)
                 _cache_persona_display(sent.message_id, persona_display)
                 await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
@@ -966,6 +978,7 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
                 return
             await db.increment_daily_messages(user_id)
 
+        sent_user_msg_id = None
         if message.voice:
             is_voice_input = True
             await message.bot.send_chat_action(user_id, "record_voice")
@@ -983,10 +996,11 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
                 parse_mode="HTML",
                 reply_markup=get_flow_user_voice_keyboard(0)
             )
-            _cache_original(sent_user.message_id, user_text)
+            sent_user_msg_id = sent_user.message_id
+            _cache_original(sent_user_msg_id, user_text)
             await safe_edit_reply_markup(
                 sent_user,
-                reply_markup=get_flow_user_voice_keyboard(sent_user.message_id)
+                reply_markup=get_flow_user_voice_keyboard(sent_user_msg_id)
             )
 
         elif message.text:
@@ -1000,7 +1014,9 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
             return
 
         user_level = user.get("level", settings.DEFAULT_USER_LEVEL)
-        await db.save_message(user_id, "user", user_text)
+        user_text_row_id = await db.save_message(user_id, "user", user_text)
+        if sent_user_msg_id and user_text_row_id:
+            asyncio.create_task(db.set_message_telegram_id(user_text_row_id, sent_user_msg_id))
 
         # Юзер вернулся — сбрасываем счётчик re-engagement фоново
         if user.get("reengagement_count", 0):
@@ -1043,7 +1059,7 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
             message_count=len(history) if history else 0,
         )
 
-        await db.save_message(user_id, "assistant", chat_response)
+        chat_response_row_id = await db.save_message(user_id, "assistant", chat_response)
         await db.increment_user_metrics(user_id, tokens_used=0)
 
         # ── Бабл 1: карточка ошибки (только если ошибка реальная) ──────────
@@ -1105,7 +1121,7 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
                     caption=persona_display,
                     reply_markup=get_flow_voice_keyboard(0)
                 )
-                _cache_original(sent_voice.message_id, chat_response)
+                _link_message(sent_voice.message_id, chat_response, chat_response_row_id)
                 await safe_edit_reply_markup(
                     sent_voice,
                     reply_markup=get_flow_voice_keyboard(sent_voice.message_id)
@@ -1118,7 +1134,7 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
             safe_response = html.escape(chat_response)
             display_response = _md_bold_to_html(safe_response)
             sent = await message.answer(f"💬 {display_response}\n\n<i>{html.escape(persona_display)}</i>", parse_mode="HTML")
-            _cache_original(sent.message_id, chat_response)
+            _link_message(sent.message_id, chat_response, chat_response_row_id)
             _cache_display(sent.message_id, display_response)
             _cache_persona_display(sent.message_id, persona_display)
             await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
@@ -1133,11 +1149,25 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
 
 # ─── Translate / Original callbacks ──────────────────────────────────────────
 
+async def _get_original_text(user_id: int, message_id: int) -> Optional[str]:
+    """
+    Text/Translate/Original кнопки: сначала in-memory кэш (быстро), затем
+    фоллбэк на БД по telegram_message_id — переживает рестарт процесса,
+    когда _originals_cache уже пуст. При попадании в БД догревает кэш.
+    """
+    text = _originals_cache.get(message_id)
+    if text:
+        return text
+    text = await db.get_message_by_telegram_id(user_id, message_id)
+    if text:
+        _cache_original(message_id, text)
+    return text
+
 @router.callback_query(F.data.startswith("translate_"))
 async def handle_translate(callback: CallbackQuery):
     try:
         message_id = int(callback.data.split("_")[1])
-        original_text = _originals_cache.get(message_id)
+        original_text = await _get_original_text(callback.from_user.id, message_id)
 
         if not original_text:
             raw = callback.message.text or ""
@@ -1191,7 +1221,7 @@ async def handle_translate(callback: CallbackQuery):
 async def handle_original(callback: CallbackQuery):
     try:
         message_id = int(callback.data.split("_")[1])
-        original_text = _originals_cache.get(message_id)
+        original_text = await _get_original_text(callback.from_user.id, message_id)
 
         if not original_text:
             await callback.answer("Original text not available.", show_alert=True)
@@ -1229,7 +1259,7 @@ async def handle_original(callback: CallbackQuery):
 async def uvoice_original(callback: CallbackQuery):
     try:
         message_id = int(callback.data.split("_")[2])
-        user_text = _originals_cache.get(message_id)
+        user_text = await _get_original_text(callback.from_user.id, message_id)
         if not user_text:
             await callback.answer("Text not available.", show_alert=True)
             return
@@ -1251,7 +1281,7 @@ async def uvoice_original(callback: CallbackQuery):
 async def flow_show_text(callback: CallbackQuery):
     try:
         message_id = int(callback.data.split("_")[2])
-        original = _originals_cache.get(message_id)
+        original = await _get_original_text(callback.from_user.id, message_id)
         if not original:
             await callback.answer("Text not available.", show_alert=True)
             return
@@ -1273,7 +1303,7 @@ async def flow_show_text(callback: CallbackQuery):
 async def flow_translate(callback: CallbackQuery):
     try:
         message_id = int(callback.data.split("_")[2])
-        original = _originals_cache.get(message_id)
+        original = await _get_original_text(callback.from_user.id, message_id)
         if not original:
             await callback.answer("Text not available.", show_alert=True)
             return
@@ -1294,7 +1324,7 @@ async def flow_translate(callback: CallbackQuery):
 async def flow_original(callback: CallbackQuery):
     try:
         message_id = int(callback.data.split("_")[2])
-        original = _originals_cache.get(message_id)
+        original = await _get_original_text(callback.from_user.id, message_id)
         if not original:
             await callback.answer("Text not available.", show_alert=True)
             return
@@ -1313,7 +1343,7 @@ async def flow_original(callback: CallbackQuery):
 async def uvoice_show_text(callback: CallbackQuery):
     try:
         message_id = int(callback.data.split("_")[2])
-        user_text = _originals_cache.get(message_id)
+        user_text = await _get_original_text(callback.from_user.id, message_id)
         if not user_text:
             await callback.answer("Text not available.", show_alert=True)
             return
@@ -1333,7 +1363,7 @@ async def uvoice_show_text(callback: CallbackQuery):
 async def uvoice_translate(callback: CallbackQuery):
     try:
         message_id = int(callback.data.split("_")[2])
-        user_text = _originals_cache.get(message_id)
+        user_text = await _get_original_text(callback.from_user.id, message_id)
         if not user_text:
             await callback.answer("Text not available.", show_alert=True)
             return
