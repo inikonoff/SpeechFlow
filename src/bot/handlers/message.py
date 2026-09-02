@@ -47,6 +47,10 @@ _originals_cache: Dict[int, str] = {}
 _display_cache: Dict[int, str] = {}  # HTML-версия с <b> для показа
 _translation_cache: Dict[int, str] = {}  # кэш переводов
 SUMMARY_MERGE_THRESHOLD = 4
+# Telegram отклоняет edit_caption с MEDIA_CAPTION_TOO_LONG выше этого предела
+# (в отличие от текстовых сообщений, лимит на подпись к медиа — 1024, а не
+# 4096). Session Summary и длинные переводы легко его превышают.
+TELEGRAM_CAPTION_LIMIT = 1024
 BUTTON_TEXTS = {
     "🎓 Tutor", "✉️ PenFriend", "🎙 Flow", "🔄 Synonym Streak",
     "⏹ Stop Flow", "⏹ Stop Tutor", "⏹ Stop PenFriend", "↩ Switch",
@@ -1307,12 +1311,23 @@ async def flow_show_text(callback: CallbackQuery):
         safe_text = html.escape(original)
         persona_disp = _persona_display_cache.get(message_id, "")
         caption_text = f"💬 {safe_text}\n\n<i>{html.escape(persona_disp)}</i>" if persona_disp else f"💬 {safe_text}"
-        await safe_edit_caption(
-            callback.message,
-            caption=caption_text,
-            parse_mode="HTML",
-            reply_markup=get_flow_voice_text_keyboard(message_id)
-        )
+        if len(caption_text) > TELEGRAM_CAPTION_LIMIT:
+            # Подпись к голосовому ограничена 1024 символами (в отличие от
+            # обычного текстового сообщения) — длинные тексты (например,
+            # Session Summary) в неё не влезают и Telegram отвечает
+            # MEDIA_CAPTION_TOO_LONG. Показываем текст отдельным сообщением
+            # с обычной текстовой клавиатурой Translate вместо правки подписи.
+            sent = await callback.message.answer(caption_text, parse_mode="HTML")
+            _cache_original(sent.message_id, original)
+            _cache_persona_display(sent.message_id, persona_disp)
+            await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
+        else:
+            await safe_edit_caption(
+                callback.message,
+                caption=caption_text,
+                parse_mode="HTML",
+                reply_markup=get_flow_voice_text_keyboard(message_id)
+            )
         await callback.answer()
     except Exception as e:
         logger.error(f"Error in flow_text callback: {e}")
@@ -1328,12 +1343,20 @@ async def flow_translate(callback: CallbackQuery):
             return
         translation = await groq_client.translate_text(original)
         safe_translation = html.escape(translation)
-        await safe_edit_caption(
-            callback.message,
-            caption=f"🌐 {safe_translation}",
-            parse_mode="HTML",
-            reply_markup=get_flow_voice_translate_keyboard(message_id)
-        )
+        caption_text = f"🌐 {safe_translation}"
+        if len(caption_text) > TELEGRAM_CAPTION_LIMIT:
+            # См. flow_show_text — перевод длинного текста (например,
+            # Session Summary) тоже не влезает в лимит подписи к медиа.
+            sent = await callback.message.answer(caption_text, parse_mode="HTML")
+            _cache_original(sent.message_id, original)
+            await safe_edit_reply_markup(sent, reply_markup=get_original_keyboard(sent.message_id))
+        else:
+            await safe_edit_caption(
+                callback.message,
+                caption=caption_text,
+                parse_mode="HTML",
+                reply_markup=get_flow_voice_translate_keyboard(message_id)
+            )
         await callback.answer()
     except Exception as e:
         logger.error(f"Error in flow_translate callback: {e}")
