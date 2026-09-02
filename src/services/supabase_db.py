@@ -232,6 +232,7 @@ class SupabaseDB:
             active_week = 0
             modes = {}
             personas = {}
+            plans = {}
 
             for u in users:
                 created_at_str = u.get("created_at")
@@ -255,6 +256,8 @@ class SupabaseDB:
                 modes[mode] = modes.get(mode, 0) + 1
                 persona = u.get("persona") or "greg"
                 personas[persona] = personas.get(persona, 0) + 1
+                plan = u.get("subscription_plan") or "free"
+                plans[plan] = plans.get(plan, 0) + 1
 
             return {
                 "total": len(users),
@@ -262,11 +265,15 @@ class SupabaseDB:
                 "new_week": new_week,
                 "active_week": active_week,
                 "mode_ranking": sorted(modes.items(), key=lambda x: x[1], reverse=True),
-                "top_personas": sorted(personas.items(), key=lambda x: x[1], reverse=True)[:5]
+                "top_personas": sorted(personas.items(), key=lambda x: x[1], reverse=True)[:5],
+                "plan_breakdown": plans,
             }
         except Exception as e:
             logger.error(f"Error getting admin stats: {e}")
-            return {"total": 0, "new_today": 0, "new_week": 0, "active_week": 0, "mode_ranking": [], "top_personas": []}
+            return {
+                "total": 0, "new_today": 0, "new_week": 0, "active_week": 0,
+                "mode_ranking": [], "top_personas": [], "plan_breakdown": {},
+            }
 
     async def get_all_users(self, limit: int = 50) -> List[Dict[str, Any]]:
         try:
@@ -689,12 +696,17 @@ class SupabaseDB:
     async def check_message_limit(self, telegram_id: int) -> dict:
         """
         Проверяет лимит сообщений пользователя.
-        Возвращает: {"allowed": bool, "used": int, "limit": int, "plan": str}
+        Возвращает: {"allowed": bool, "used": int, "limit": int, "plan": str,
+                      "just_expired": bool}
+        just_expired=True означает, что именно на этом вызове подписка
+        истекла и план откатился на free — вызывающий код может
+        показать юзеру уведомление об этом (см. message.py).
         """
         try:
             from src.config import get_daily_message_limit
             user = await self.get_or_create_user(telegram_id)
-            if await self.check_subscription_expired(telegram_id):
+            just_expired = await self.check_subscription_expired(telegram_id)
+            if just_expired:
                 user["subscription_plan"] = "free"
             plan = user.get("subscription_plan", "free")
             limit = get_daily_message_limit(plan)
@@ -713,10 +725,13 @@ class SupabaseDB:
 
             # 0 = безлимит (pro)
             allowed = (limit == 0) or (used < limit)
-            return {"allowed": allowed, "used": used, "limit": limit, "plan": plan}
+            return {
+                "allowed": allowed, "used": used, "limit": limit, "plan": plan,
+                "just_expired": just_expired,
+            }
         except Exception as e:
             logger.error(f"Error checking message limit: {e}")
-            return {"allowed": True, "used": 0, "limit": 0, "plan": "free"}
+            return {"allowed": True, "used": 0, "limit": 0, "plan": "free", "just_expired": False}
 
     async def increment_daily_messages(self, telegram_id: int) -> bool:
         """Увеличивает счётчик использованных сообщений за день."""
@@ -769,6 +784,53 @@ class SupabaseDB:
         except Exception as e:
             logger.error(f"Error checking subscription: {e}")
             return False
+
+    async def get_users_with_expired_subscription(self) -> List[Dict[str, Any]]:
+        """
+        Юзеры, чья платная подписка/триал истекли, но ещё не откатились на
+        free — это происходит только когда юзер сам напишет боту
+        (check_subscription_expired вызывается лениво, из check_message_limit).
+        Используется планировщиком, чтобы проактивно откатить и уведомить
+        даже тех, кто просто перестал писать боту после истечения триала.
+        """
+        try:
+            now = datetime.utcnow().isoformat()
+            response = (self.client.table("users")
+                        .select("telegram_id, subscription_plan, subscription_expires_at")
+                        .neq("subscription_plan", "free")
+                        .lt("subscription_expires_at", now)
+                        .execute())
+            return response.data or []
+        except Exception as e:
+            logger.error(f"Error getting users with expired subscription: {e}")
+            return []
+
+    async def grant_retroactive_trial(self, days: int = 7) -> int:
+        """
+        Разовая ручная операция (кнопка в админ-панели): выдаёт Pro-триал
+        существующим free-пользователям, которые завели аккаунт до того,
+        как триал стал выдаваться автоматически при регистрации. Не
+        трогает тех, кто уже на pro (в том числе платно) — только free.
+        Возвращает количество апгрейднутых пользователей.
+        """
+        try:
+            response = (self.client.table("users")
+                        .select("telegram_id")
+                        .eq("subscription_plan", "free")
+                        .execute())
+            users = response.data or []
+            if not users:
+                return 0
+            expires_at = (datetime.utcnow() + timedelta(days=days)).isoformat()
+            for u in users:
+                self.client.table("users").update({
+                    "subscription_plan": "pro",
+                    "subscription_expires_at": expires_at,
+                }).eq("telegram_id", u["telegram_id"]).execute()
+            return len(users)
+        except Exception as e:
+            logger.error(f"Error granting retroactive trial: {e}")
+            return 0
 
 
 db = SupabaseDB()

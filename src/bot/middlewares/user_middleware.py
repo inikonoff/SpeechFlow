@@ -1,7 +1,6 @@
-import time
 import logging
-from collections import defaultdict
-from typing import Callable, Dict, Any, Awaitable
+from datetime import datetime, timezone, timedelta
+from typing import Callable, Dict, Any, Awaitable, Optional
 
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, Message
@@ -20,36 +19,21 @@ RATE_LIMIT_MAX_ADMIN = 100     # мягкий лимит для админа
 COOLDOWN_DURATION    = 60      # секунд тишины после превышения лимита
 WARN_THRESHOLD       = 7       # с этого количества предупреждаем
 
-# ─── In-memory хранилище ──────────────────────────────────────────────────
-_message_timestamps: Dict[int, list] = defaultdict(list)
-_cooldowns: Dict[int, float] = {}
-_warned: Dict[int, bool] = {}
+# Состояние (окно/счётчик/cooldown) хранится в таблице users
+# (burst_message_count/burst_window_start/burst_cooldown_until) — раньше
+# было в in-memory словарях этого модуля и обнулялось на каждом рестарте
+# процесса, то есть спамер получал новый чистый лимит просто дождавшись
+# редеплоя. Теперь переживает рестарт так же, как daily_messages_used.
 
-_last_cleanup = 0.0
 
-def _periodic_cleanup(now: float):
-    global _last_cleanup
-    if now - _last_cleanup > 3600:  # Clean memory every hour
-        cutoff = now - RATE_LIMIT_WINDOW
-        for uid in list(_message_timestamps.keys()):
-            _message_timestamps[uid] = [t for t in _message_timestamps[uid] if t > cutoff]
-            if not _message_timestamps[uid]:
-                del _message_timestamps[uid]
-        for uid in list(_cooldowns.keys()):
-            if _cooldowns[uid] < now:
-                del _cooldowns[uid]
-                _warned.pop(uid, None)
-        _last_cleanup = now
+def _parse_dt(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:
+        return None
 
-def _clean_old(user_id: int, now: float) -> None:
-    cutoff = now - RATE_LIMIT_WINDOW
-    _message_timestamps[user_id] = [
-        t for t in _message_timestamps[user_id] if t > cutoff
-    ]
-
-def _count_recent(user_id: int, now: float) -> int:
-    _clean_old(user_id, now)
-    return len(_message_timestamps[user_id])
 
 class UserMiddleware(BaseMiddleware):
     async def __call__(
@@ -80,6 +64,7 @@ class UserMiddleware(BaseMiddleware):
             logger.error(f"Error loading user {user_id}: {e}")
             data["user"] = {}
             data["is_admin"] = False
+            user = {}
 
         message: Message | None = None
         if isinstance(event, Message):
@@ -90,45 +75,51 @@ class UserMiddleware(BaseMiddleware):
         if message is None:
             return await handler(event, data)
 
-        now = time.monotonic()
-        _periodic_cleanup(now)
-        
+        now = datetime.now(timezone.utc)
         limit = RATE_LIMIT_MAX_ADMIN if is_admin else RATE_LIMIT_MAX
 
-        if not is_admin and user_id in _cooldowns:
-            if now < _cooldowns[user_id]:
-                remaining = int(_cooldowns[user_id] - now)
-                if not _warned.get(user_id):
-                    _warned[user_id] = True
-                    await message.answer(
-                        f"Please wait {remaining}s before sending more messages."
-                    )
-                logger.warning(f"User {user_id} in cooldown, {remaining}s left")
-                return
-            else:
-                del _cooldowns[user_id]
-                _warned.pop(user_id, None)
-                _message_timestamps[user_id].clear()
+        cooldown_until = _parse_dt(user.get("burst_cooldown_until"))
+        if not is_admin and cooldown_until and now < cooldown_until:
+            # Предупреждение уже было отправлено в момент входа в cooldown
+            # (см. ниже) — дальше молча дропаем, чтобы не спамить "подождите"
+            # в ответ на и без того частые сообщения.
+            remaining = int((cooldown_until - now).total_seconds())
+            logger.warning(f"User {user_id} in cooldown, {remaining}s left")
+            return
 
-        _message_timestamps[user_id].append(now)
-        count = _count_recent(user_id, now)
+        window_start = _parse_dt(user.get("burst_window_start"))
+        count = user.get("burst_message_count", 0) or 0
 
-        if count > limit:
-            if not is_admin:
-                _cooldowns[user_id] = now + COOLDOWN_DURATION
-                _warned[user_id] = True
-                logger.warning(f"Rate limit: user {user_id}, {count} msgs/{RATE_LIMIT_WINDOW}s")
-                await message.answer(
-                    f"You've sent {count} messages in under a minute. "
-                    f"Take a breath — I'll be back in {COOLDOWN_DURATION} seconds. ☕"
-                )
-                return
+        if not window_start or (now - window_start).total_seconds() > RATE_LIMIT_WINDOW:
+            window_start = now
+            count = 0
 
-        if count >= WARN_THRESHOLD and not _warned.get(user_id) and not is_admin:
-            _warned[user_id] = True
+        count += 1
+
+        if count > limit and not is_admin:
+            new_cooldown = now + timedelta(seconds=COOLDOWN_DURATION)
+            await db.update_user(user_id, {
+                "burst_message_count": count,
+                "burst_window_start": window_start.isoformat(),
+                "burst_cooldown_until": new_cooldown.isoformat(),
+            })
+            logger.warning(f"Rate limit: user {user_id}, {count} msgs/{RATE_LIMIT_WINDOW}s")
+            await message.answer(
+                f"You've sent {count} messages in under a minute. "
+                f"Take a breath — I'll be back in {COOLDOWN_DURATION} seconds. ☕"
+            )
+            return
+
+        if count == WARN_THRESHOLD and not is_admin:
             await message.answer(
                 "You're sending messages very fast — slow down a little so I can keep up."
             )
+
+        await db.update_user(user_id, {
+            "burst_message_count": count,
+            "burst_window_start": window_start.isoformat(),
+            "burst_cooldown_until": None,
+        })
 
         if message.text and len(message.text) > MAX_MESSAGE_LENGTH:
             original_len = len(message.text)

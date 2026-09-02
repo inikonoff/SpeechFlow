@@ -268,6 +268,21 @@ async def _run_level_assessment(user_id: int, current_level: str, message: Messa
 # ─── Лимит сообщений ─────────────────────────────────────────────────────────
 
 
+async def _notify_expired(message) -> None:
+    """
+    Ленивый путь: подписка/триал истекли ровно на этом сообщении
+    (check_message_limit -> check_subscription_expired обнаружил это
+    прямо сейчас). Проактивный путь для тех, кто не пишет боту вообще —
+    scheduler.send_expiry_notifications.
+    """
+    await message.answer(
+        "⏳ <b>Your Pro access has ended</b>\n\n"
+        "You're back on the free plan — Mrs. Smith is still here, "
+        "10 messages a day. Upgrade anytime from /settings.",
+        parse_mode="HTML"
+    )
+
+
 async def _show_limit_reached(message, limit_info: dict) -> None:
     """
     Показывает сообщение о достижении дневного лимита free-плана.
@@ -766,6 +781,8 @@ async def handle_flow_message(message: Message, state: FSMContext, user: Dict[st
         # ─── Проверка лимита сообщений ────────────────────────────────────────
         if user_id not in ADMIN_IDS:
             limit_info = await db.check_message_limit(user_id)
+            if limit_info.get("just_expired"):
+                await _notify_expired(message)
             if not limit_info["allowed"]:
                 await _show_limit_reached(message, limit_info)
                 return
@@ -973,6 +990,8 @@ async def handle_message(message: Message, state: FSMContext, user: Dict[str, An
         # ─── Проверка лимита сообщений ────────────────────────────────────────
         if not is_admin:
             limit_info = await db.check_message_limit(user_id)
+            if limit_info.get("just_expired"):
+                await _notify_expired(message)
             if not limit_info["allowed"]:
                 await _show_limit_reached(message, limit_info)
                 return

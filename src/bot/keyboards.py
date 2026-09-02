@@ -59,6 +59,7 @@ def get_admin_panel_keyboard() -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="📊 Статистика",    callback_data="admin_stats"))
     builder.row(InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_users"))
     builder.row(InlineKeyboardButton(text="📣 Broadcast",    callback_data="admin_broadcast"))
+    builder.row(InlineKeyboardButton(text="🎁 Trial → free-юзерам", callback_data="admin_grant_trial"))
     builder.row(InlineKeyboardButton(text="← Назад",         callback_data="back_to_settings"))
     return builder.as_markup()
 

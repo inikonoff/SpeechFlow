@@ -444,6 +444,48 @@ async def show_admin_panel(callback: CallbackQuery):
         logger.error(f"Error in admin_panel: {e}")
         await callback.answer("Error.", show_alert=True)
 
+@router.callback_query(F.data == "admin_grant_trial")
+@_admin_only
+async def cq_admin_grant_trial_confirm(callback: CallbackQuery):
+    """Подтверждение перед разовой массовой операцией — без confirm легко нажать случайно."""
+    try:
+        from aiogram.utils.keyboard import InlineKeyboardBuilder
+        from aiogram.types import InlineKeyboardButton
+        from src.config import TRIAL_DAYS
+        builder = InlineKeyboardBuilder()
+        builder.row(
+            InlineKeyboardButton(text="✅ Да, выдать", callback_data="admin_grant_trial_go"),
+            InlineKeyboardButton(text="Отмена", callback_data="admin_panel"),
+        )
+        await safe_edit_text(
+            callback.message,
+            f"🎁 Выдать {TRIAL_DAYS}-дневный Pro-триал всем текущим free-пользователям?\n\n"
+            f"Затронет только тех, кто сейчас на free — уже платящих не тронет.",
+            parse_mode="HTML",
+            reply_markup=builder.as_markup()
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in admin_grant_trial confirm: {e}")
+        await callback.answer("Error.", show_alert=True)
+
+@router.callback_query(F.data == "admin_grant_trial_go")
+@_admin_only
+async def cq_admin_grant_trial_go(callback: CallbackQuery):
+    try:
+        from src.config import TRIAL_DAYS
+        count = await db.grant_retroactive_trial(days=TRIAL_DAYS)
+        await safe_edit_text(
+            callback.message,
+            f"🎁 Готово — {TRIAL_DAYS}-дневный Pro-триал выдан <b>{count}</b> пользователям.",
+            parse_mode="HTML",
+            reply_markup=get_admin_panel_keyboard()
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error in admin_grant_trial go: {e}")
+        await callback.answer("Error.", show_alert=True)
+
 @router.callback_query(F.data == "admin_stats")
 @_admin_only
 async def show_admin_stats(callback: CallbackQuery):
@@ -466,12 +508,19 @@ async def show_admin_stats(callback: CallbackQuery):
             name = persona.replace("_", " ").capitalize()
             persona_lines += f"  {i}. {icon} {name}: <b>{cnt}</b>\n"
 
+        plan_breakdown = stats.get("plan_breakdown", {})
+        plan_lines = (
+            f"  🆓 Free: <b>{plan_breakdown.get('free', 0)}</b>\n"
+            f"  🌟 Pro (включая триал): <b>{plan_breakdown.get('pro', 0)}</b>\n"
+        )
+
         text = (
             "📊 <b>Статистика</b>\n\n"
             f"👥 Всего: <b>{stats.get('total', 0)}</b>\n"
             f"🆕 Новых сегодня: <b>{stats.get('new_today', 0)}</b>\n"
             f"📅 Новых за неделю: <b>{stats.get('new_week', 0)}</b>\n"
             f"🟢 Активных за неделю: <b>{stats.get('active_week', 0)}</b>\n\n"
+            f"💳 <b>Тарифы</b>\n{plan_lines}\n"
             f"🎭 <b>Топ персонажей</b>\n{persona_lines or '  —'}\n"
             f"🗂 <b>Режимы</b>\n{mode_lines or '  —'}"
         )

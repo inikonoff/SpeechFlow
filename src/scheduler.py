@@ -117,6 +117,47 @@ async def send_re_engagement_notifications(bot: Bot) -> None:
         logger.error(f"❌ Error in re-engagement scheduler: {e}")
 
 
+async def send_expiry_notifications(bot: Bot) -> None:
+    """
+    Проактивно откатывает истёкшие Pro-подписки/триалы на free и
+    уведомляет юзера. Ловит тех, кто не написал боту после истечения —
+    check_subscription_expired сам по себе ленивый (срабатывает только
+    когда юзер прислал сообщение), без этого прохода такие юзеры молча
+    оставались бы отмеченными как "pro" сколько угодно, просто ни разу
+    не пройдя проверку лимита.
+    """
+    try:
+        users = await db.get_users_with_expired_subscription()
+        if not users:
+            return
+
+        logger.info(f"⏳ Reverting {len(users)} expired subscriptions")
+
+        for user in users:
+            telegram_id = user.get("telegram_id")
+            try:
+                await db.update_user(telegram_id, {
+                    "subscription_plan": "free",
+                    "subscription_expires_at": None,
+                })
+                await bot.send_message(
+                    chat_id=telegram_id,
+                    text=(
+                        "⏳ <b>Your Pro access has ended</b>\n\n"
+                        "You're back on the free plan — Mrs. Smith is still here, "
+                        "10 messages a day. Upgrade anytime from /settings."
+                    ),
+                    parse_mode="HTML"
+                )
+                logger.info(f"✅ Expiry notice sent to user {telegram_id}")
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                logger.error(f"❌ Failed to revert/notify user {telegram_id}: {e}")
+
+    except Exception as e:
+        logger.error(f"❌ Error in expiry notifications: {e}")
+
+
 _last_sunday_deep_dive_week: str = ""  # ISO-неделя ("2026-W35") последней успешной рассылки
 
 
@@ -125,6 +166,7 @@ async def run_scheduler(bot: Bot) -> None:
     Фоновая задача: каждый час проверяет:
     1. Воскресенье, начиная с 9:00 UTC → Sunday Deep Dive от Mrs. Smith
     2. Каждый час → re-engagement для неактивных юзеров
+    3. Каждый час → откат и уведомление по истёкшим Pro-подпискам/триалам
 
     Окно для Sunday Deep Dive расширено до "9:00–12:00 UTC" вместо строго
     одного часа: если процесс перезапустился (деплой на Render) и не
@@ -161,6 +203,9 @@ async def run_scheduler(bot: Bot) -> None:
 
             # Re-engagement: каждый час
             await send_re_engagement_notifications(bot)
+
+            # Истёкшие подписки/триалы: каждый час
+            await send_expiry_notifications(bot)
 
         except asyncio.CancelledError:
             logger.info("🛑 Scheduler stopped")
