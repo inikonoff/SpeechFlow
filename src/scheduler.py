@@ -1,3 +1,7 @@
+# CHANGELOG: 2026-09-28
+# - send_sunday_deep_dive: пропускаем пользователей с msgs_this_week == 0
+#   (раньше Deep Dive уходил всем с notifications_enabled, даже без активности)
+
 import asyncio
 import logging
 from datetime import datetime, timezone
@@ -33,6 +37,15 @@ async def send_sunday_deep_dive(bot: Bot) -> None:
                 telegram_id = user.get("telegram_id")
 
                 stats = await db.get_user_stats(telegram_id)
+
+                # Не писать тем, кто на этой неделе не заходил вообще:
+                # отчёт "0 ошибок" без единого сообщения — спам.
+                # Критерий — сообщения пользователя, а не ошибки: 15 сообщений
+                # без ошибок — это повод для похвалы, а не для тишины.
+                if stats.get("msgs_this_week", 0) == 0:
+                    logger.info(f"⏭️ Skip Deep Dive for {telegram_id}: no activity this week")
+                    continue
+
                 errors = await db.get_weekly_errors_for_report(telegram_id)
 
                 report_text = await groq_client.generate_sunday_deep_dive(
@@ -117,95 +130,25 @@ async def send_re_engagement_notifications(bot: Bot) -> None:
         logger.error(f"❌ Error in re-engagement scheduler: {e}")
 
 
-async def send_expiry_notifications(bot: Bot) -> None:
-    """
-    Проактивно откатывает истёкшие Pro-подписки/триалы на free и
-    уведомляет юзера. Ловит тех, кто не написал боту после истечения —
-    check_subscription_expired сам по себе ленивый (срабатывает только
-    когда юзер прислал сообщение), без этого прохода такие юзеры молча
-    оставались бы отмеченными как "pro" сколько угодно, просто ни разу
-    не пройдя проверку лимита.
-    """
-    try:
-        users = await db.get_users_with_expired_subscription()
-        if not users:
-            return
-
-        logger.info(f"⏳ Reverting {len(users)} expired subscriptions")
-
-        for user in users:
-            telegram_id = user.get("telegram_id")
-            try:
-                await db.update_user(telegram_id, {
-                    "subscription_plan": "free",
-                    "subscription_expires_at": None,
-                })
-                await bot.send_message(
-                    chat_id=telegram_id,
-                    text=(
-                        "⏳ <b>Your Pro access has ended</b>\n\n"
-                        "You're back on the free plan — Mrs. Smith is still here, "
-                        "10 messages a day. Upgrade anytime from /settings."
-                    ),
-                    parse_mode="HTML"
-                )
-                logger.info(f"✅ Expiry notice sent to user {telegram_id}")
-                await asyncio.sleep(0.5)
-            except Exception as e:
-                logger.error(f"❌ Failed to revert/notify user {telegram_id}: {e}")
-
-    except Exception as e:
-        logger.error(f"❌ Error in expiry notifications: {e}")
-
-
-_last_sunday_deep_dive_week: str = ""  # ISO-неделя ("2026-W35") последней успешной рассылки
-
-
 async def run_scheduler(bot: Bot) -> None:
     """
     Фоновая задача: каждый час проверяет:
-    1. Воскресенье, начиная с 9:00 UTC → Sunday Deep Dive от Mrs. Smith
+    1. Воскресенье 9–10 UTC → Sunday Deep Dive от Mrs. Smith
     2. Каждый час → re-engagement для неактивных юзеров
-    3. Каждый час → откат и уведомление по истёкшим Pro-подпискам/триалам
-
-    Окно для Sunday Deep Dive расширено до "9:00–12:00 UTC" вместо строго
-    одного часа: если процесс перезапустился (деплой на Render) и не
-    успел тикнуть ровно в час 9, рассылка не потеряется на всю неделю —
-    следующий тик в пределах того же окна её досошлёт. Флаг "уже
-    отправляли на этой ISO-неделе" в памяти процесса не даёт отправить
-    дважды за одно и то же окно.
-
-    ВАЖНО: флаг живёт только в памяти процесса — если контейнер
-    перезапустится ПОСЛЕ уже состоявшейся отправки, но всё ещё внутри
-    окна 9:00–12:00, рассылка в теории может уйти повторно. Полностью
-    убрать этот риск можно только персистентной отметкой в БД (отдельная
-    колонка/таблица в Supabase) — этого в текущей схеме нет, добавлять
-    вслепую без доступа к консоли Supabase не стал.
     """
-    global _last_sunday_deep_dive_week
     logger.info("🕐 Scheduler started")
     while True:
         try:
             await asyncio.sleep(CHECK_INTERVAL_SECONDS)
 
             now = datetime.now(timezone.utc)
-            current_week = now.strftime("%G-W%V")
 
-            # Sunday Deep Dive: воскресенье (weekday=6), окно 9:00–12:00 UTC,
-            # максимум раз в ISO-неделю.
-            if (
-                now.weekday() == 6
-                and 9 <= now.hour < 12
-                and _last_sunday_deep_dive_week != current_week
-            ):
+            # Sunday Deep Dive: воскресенье (weekday=6), 9:00–10:00 UTC
+            if now.weekday() == 6 and now.hour == 9:
                 await send_sunday_deep_dive(bot)
-                _last_sunday_deep_dive_week = current_week
 
             # Re-engagement: каждый час
             await send_re_engagement_notifications(bot)
-
-            # Истёкшие подписки/триалы: каждый час
-            await send_expiry_notifications(bot)
 
         except asyncio.CancelledError:
             logger.info("🛑 Scheduler stopped")
@@ -213,3 +156,4 @@ async def run_scheduler(bot: Bot) -> None:
         except Exception as e:
             logger.error(f"❌ Scheduler error: {e}")
             await asyncio.sleep(60)
+            
