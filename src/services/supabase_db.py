@@ -153,16 +153,15 @@ class SupabaseDB:
         """
         Возвращает юзеров которым нужно отправить re-engagement.
         Интервал зависит от reengagement_count:
-          0 → 24ч с last_active
-          1 → 48ч с last_notified_at
-          2 → 72ч с last_notified_at
-          3+ → никогда
+          0 → 72ч (3 дня) с last_active
+          1 → ещё 96ч (4 дня) с last_notified_at — то есть ~неделя с last_active
+          2+ → никогда
         """
         try:
             response = (self.client.table("users")
                         .select("*")
                         .eq("notifications_enabled", True)
-                        .lt("reengagement_count", 3)
+                        .lt("reengagement_count", 2)
                         .execute())
             candidates = response.data or []
             now = datetime.utcnow()
@@ -170,13 +169,14 @@ class SupabaseDB:
             for u in candidates:
                 count = u.get("reengagement_count", 0) or 0
                 if count == 0:
-                    # Первое: 24ч с last_active
+                    # Первое: 72ч (3 дня) с last_active
                     ref_str = u.get("last_active")
-                    hours_needed = 24
+                    hours_needed = 72
                 else:
-                    # Второе/третье: 48/72ч с last_notified_at
+                    # Второе (последнее): 96ч (4 дня) с last_notified_at,
+                    # вместе с первым — около недели с last_active
                     ref_str = u.get("last_notified_at")
-                    hours_needed = 48 if count == 1 else 72
+                    hours_needed = 96
                 if not ref_str:
                     continue
                 try:
