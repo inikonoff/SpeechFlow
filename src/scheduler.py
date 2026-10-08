@@ -12,6 +12,7 @@ from src.bot.keyboards import get_flow_voice_keyboard
 from src.services.supabase_db import db
 from src.services.groq_client import groq_client
 from src.personas import get_persona_voice, get_persona_display
+from src.bot.handlers.message import _cache_original, _cache_persona_display
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,12 @@ async def send_re_engagement_notifications(bot: Bot) -> None:
                         caption=f"🎙 {persona_display}",
                         reply_markup=get_flow_voice_keyboard(0)
                     )
+                    # Без этого кнопка "Text" на напоминании отвечала "Text
+                    # not available" — текст никогда не попадал ни в
+                    # in-memory кэш, ни в БД (в отличие от обычных Flow-ответов
+                    # из message.py, которые кэшируются сразу после отправки).
+                    _cache_original(sent.message_id, message_text)
+                    _cache_persona_display(sent.message_id, persona_display)
                     await bot.edit_message_reply_markup(
                         chat_id=telegram_id,
                         message_id=sent.message_id,

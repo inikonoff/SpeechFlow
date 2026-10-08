@@ -1300,35 +1300,47 @@ async def uvoice_original(callback: CallbackQuery):
 
 # ─── Flow voice callbacks ──────────────────────────────────────────────────────
 
+async def _render_flow_voice_text(callback: CallbackQuery, message_id: int) -> None:
+    """
+    Показывает транскрипт голосового от персонажа + кнопку Translate.
+    Общая для flow_text_ (первый показ) и flow_original_ (возврат из
+    перевода) — раньше flow_original сбрасывал подпись обратно в пустой
+    persona_display вместо показа текста, и Text/Translate было
+    нельзя переключать туда-обратно, только утрачивать транскрипт и
+    запрашивать Text с нуля.
+    """
+    original = await _get_original_text(callback.from_user.id, message_id)
+    if not original:
+        await callback.answer("Text not available.", show_alert=True)
+        return
+    safe_text = html.escape(original)
+    persona_disp = _persona_display_cache.get(message_id, "")
+    caption_text = f"💬 {safe_text}\n\n<i>{html.escape(persona_disp)}</i>" if persona_disp else f"💬 {safe_text}"
+    if len(caption_text) > TELEGRAM_CAPTION_LIMIT:
+        # Подпись к голосовому ограничена 1024 символами (в отличие от
+        # обычного текстового сообщения) — длинные тексты (например,
+        # Session Summary) в неё не влезают и Telegram отвечает
+        # MEDIA_CAPTION_TOO_LONG. Показываем текст отдельным сообщением
+        # с обычной текстовой клавиатурой Translate вместо правки подписи.
+        sent = await callback.message.answer(caption_text, parse_mode="HTML")
+        _cache_original(sent.message_id, original)
+        _cache_persona_display(sent.message_id, persona_disp)
+        await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
+    else:
+        await safe_edit_caption(
+            callback.message,
+            caption=caption_text,
+            parse_mode="HTML",
+            reply_markup=get_flow_voice_text_keyboard(message_id)
+        )
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("flow_text_"))
 async def flow_show_text(callback: CallbackQuery):
     try:
         message_id = int(callback.data.split("_")[2])
-        original = await _get_original_text(callback.from_user.id, message_id)
-        if not original:
-            await callback.answer("Text not available.", show_alert=True)
-            return
-        safe_text = html.escape(original)
-        persona_disp = _persona_display_cache.get(message_id, "")
-        caption_text = f"💬 {safe_text}\n\n<i>{html.escape(persona_disp)}</i>" if persona_disp else f"💬 {safe_text}"
-        if len(caption_text) > TELEGRAM_CAPTION_LIMIT:
-            # Подпись к голосовому ограничена 1024 символами (в отличие от
-            # обычного текстового сообщения) — длинные тексты (например,
-            # Session Summary) в неё не влезают и Telegram отвечает
-            # MEDIA_CAPTION_TOO_LONG. Показываем текст отдельным сообщением
-            # с обычной текстовой клавиатурой Translate вместо правки подписи.
-            sent = await callback.message.answer(caption_text, parse_mode="HTML")
-            _cache_original(sent.message_id, original)
-            _cache_persona_display(sent.message_id, persona_disp)
-            await safe_edit_reply_markup(sent, reply_markup=get_translate_keyboard(sent.message_id))
-        else:
-            await safe_edit_caption(
-                callback.message,
-                caption=caption_text,
-                parse_mode="HTML",
-                reply_markup=get_flow_voice_text_keyboard(message_id)
-            )
-        await callback.answer()
+        await _render_flow_voice_text(callback, message_id)
     except Exception as e:
         logger.error(f"Error in flow_text callback: {e}")
         await callback.answer("Error.", show_alert=True)
@@ -1366,17 +1378,7 @@ async def flow_translate(callback: CallbackQuery):
 async def flow_original(callback: CallbackQuery):
     try:
         message_id = int(callback.data.split("_")[2])
-        original = await _get_original_text(callback.from_user.id, message_id)
-        if not original:
-            await callback.answer("Text not available.", show_alert=True)
-            return
-        persona_display = _persona_display_cache.get(message_id, "")
-        await safe_edit_caption(
-            callback.message,
-            caption=persona_display,
-            reply_markup=get_flow_voice_keyboard(message_id)
-        )
-        await callback.answer()
+        await _render_flow_voice_text(callback, message_id)
     except Exception as e:
         logger.error(f"Error in flow_original callback: {e}")
         await callback.answer("Error.", show_alert=True)
